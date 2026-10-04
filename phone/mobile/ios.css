@@ -1,0 +1,7 @@
+/* Phone only: keep the page clear of the iPhone's status bar and notch, and stop
+   content showing through behind the status bar while scrolling. */
+body { padding-top: env(safe-area-inset-top); }
+body::before {
+  content: ''; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top);
+  background: var(--bg, #f7f4ee); z-index: 30;
+}

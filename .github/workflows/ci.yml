@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: phone/package-lock.json
+
+      - name: Web app tests
+        working-directory: web
+        run: npm test
+
+      - name: Phone and home screen tests
+        working-directory: phone
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm test
+          npm run test:e2e
+          npm run test:web

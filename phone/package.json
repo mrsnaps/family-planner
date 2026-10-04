@@ -1,0 +1,32 @@
+{
+  "name": "family-planner-ios",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Family Planner as an iPhone app: the shared app runs on the phone, with Apple on-device AI and an optional AI of your choice.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "sync": "npm run build && npx cap sync ios",
+    "open": "npx cap open ios",
+    "serve": "npm run build && node scripts/serve.mjs",
+    "ios:assets": "node scripts/ios-assets.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:e2e": "npm run build && node test/app.e2e.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "test:web": "npm run build:web && node test/web.e2e.mjs",
+    "zip:web": "node scripts/build-web.mjs --zip"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/ios": "^8.5.2",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/share": "^8.0.3",
+    "family-planner-on-device-ai": "file:plugins/on-device-ai"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.56.1"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "appId": "com.familyplanner.app",
+  "appName": "Family Planner",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#f7f4ee"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "presentationOptions": ["banner", "sound", "list"]
+    }
+  }
+}

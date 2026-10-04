@@ -1,0 +1,6 @@
+node_modules/
+www/
+dist-web/
+family-planner-home-screen.zip
+test/shots/
+.DS_Store

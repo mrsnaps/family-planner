@@ -1,0 +1,15 @@
+# AWS Amplify Hosting build: turns the web app into the static home screen version
+# (phone/dist-web). Everything runs in the browser, so there's no server to host.
+version: 1
+frontend:
+  phases:
+    build:
+      commands:
+        - cd phone && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci && npm run build:web
+  artifacts:
+    baseDirectory: phone/dist-web
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - phone/node_modules/**/*

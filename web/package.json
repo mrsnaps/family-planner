@@ -1,0 +1,16 @@
+{
+  "name": "family-planner",
+  "version": "0.1.0",
+  "description": "Food planner and kids clothes matcher: two modules behind one UI and one JSON API.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

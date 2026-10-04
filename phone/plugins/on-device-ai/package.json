@@ -1,0 +1,10 @@
+{
+  "name": "family-planner-on-device-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Capacitor plugin for the Family Planner iPhone app: Apple's on-device language model (Foundation Models) and Vision photo reading.",
+  "main": "index.js",
+  "files": ["index.js", "ios/Sources", "Package.swift"],
+  "capacitor": { "ios": { "src": "ios" } },
+  "peerDependencies": { "@capacitor/core": ">=8.0.0" }
+}
