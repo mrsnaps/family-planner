@@ -378,7 +378,7 @@ async function renderHome() {
   try { nudge = nudge && !localStorage.getItem('fp-account-nudge'); } catch {}
   $('#page').innerHTML = `
     ${firstRun ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Welcome! Let's set things up</h2></div>
-      ${signedOut ? `<p class="hint" style="margin-bottom:10px">Already set up on another device? <button class="btn sm" data-account="signin">Sign in</button></p>` : ''}
+      ${signedOut ? `<p class="hint" style="margin-bottom:10px">Save your lists online and share them with your family: <button class="btn sm" data-account="signin">Sign in</button> <button class="btn sm" data-account="signup">Create account</button></p>` : ''}
       <div class="chips">
         <button class="chip" data-nav="family">${icon('people')} 1. Add your family</button>
         <button class="chip" data-nav="food">${icon('food')} 2. Add what's in the cupboards</button>
@@ -1614,7 +1614,8 @@ async function accountSignIn(email = '') {
   const done = await accountStep({
     title: 'Sign in',
     fields: (v) => emailField(v.email || email) + field('password', 'Password', 'password', '', 'autocomplete="current-password"') +
-      '<p class="small" style="margin-top:10px"><button type="button" class="btn ghost sm" data-account="forgot">Forgot password?</button></p>',
+      '<p class="small" style="margin-top:10px"><button type="button" class="btn ghost sm" data-account="forgot">Forgot password?</button></p>' +
+      '<p class="hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">New to Family Planner? <button type="button" class="btn sm" data-account="to-signup">Create an account</button></p>',
     ok: 'Sign in',
     run: async (v) => {
       if (!v.email || !v.password) throw new Error('Enter your email and password.');
@@ -1638,11 +1639,12 @@ async function accountSignIn(email = '') {
   await refresh();
 }
 
-async function accountSignUp() {
+async function accountSignUp(email = '') {
   const created = await accountStep({
     title: 'Create an account',
     intro: 'This is your own login. To share lists with someone, one of you invites the other from Settings once you are signed in.',
-    fields: (v) => emailField(v.email) + field('password', 'Password (8 or more characters, with a number)', 'password', '', 'autocomplete="new-password"'),
+    fields: (v) => emailField(v.email || email) + field('password', 'Password (8 or more characters, with a number)', 'password', '', 'autocomplete="new-password"') +
+      '<p class="hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">Already have an account? <button type="button" class="btn sm" data-account="to-signin">Sign in</button></p>',
     ok: 'Create account',
     run: async (v) => {
       if (!v.email || !v.password) throw new Error('Enter an email and a password.');
@@ -1752,12 +1754,12 @@ async function accountAction(what) {
   if (what === 'leave') return accountLeave();
   if (what === 'signin') return accountSignIn();
   if (what === 'signup') return accountSignUp();
-  if (what === 'forgot') {
+  if (['forgot', 'to-signup', 'to-signin'].includes(what)) {
     const email = $('#dialog-form input[name=email]')?.value || '';
     const dlg = $('#dialog');
-    // Let the sign-in dialog finish closing before the next one opens in its place.
+    // Let this dialog finish closing before the next one opens in its place.
     await new Promise((resolve) => { dlg.addEventListener('close', () => setTimeout(resolve), { once: true }); dlg.close('cancel'); });
-    return accountForgot(email);
+    return what === 'forgot' ? accountForgot(email) : what === 'to-signup' ? accountSignUp(email) : accountSignIn(email);
   }
   if (what === 'dismiss') {
     try { localStorage.setItem('fp-account-nudge', 'no'); } catch {}

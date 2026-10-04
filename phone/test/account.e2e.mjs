@@ -158,9 +158,14 @@ try {
   await c.page.click('#dialog-form button:has-text("Done")');
   const d = await open({ poll: 400 });
   await d.api('/food/items', 'POST', { name: 'crisps', quantity: 1, unit: 'bag' });
+  // New people can register from the Sign in box too (the email they typed carries over).
   await d.page.click('[data-nav="settings"]:visible');
-  await d.page.click('[data-account="signup"]');
-  await d.fill({ email: 'partner@example.com', password: 'partner123' }, 'Create account');
+  await d.page.click('[data-account="signin"]');
+  await d.page.fill('#dialog-form input[name=email]', 'partner@example.com');
+  await d.page.click('#dialog-form [data-account="to-signup"]');
+  await d.page.waitForSelector('#dialog-form h2:has-text("Create an account")');
+  assert.equal(await d.page.inputValue('#dialog-form input[name=email]'), 'partner@example.com');
+  await d.fill({ password: 'partner123' }, 'Create account');
   await d.fill({ code: '123456' }, 'Confirm');
   await d.toast(/Account created/);
   assert.deepEqual(cloud.data('partner@example.com').food.pantry.map((i) => i.name), ['crisps']);
