@@ -372,6 +372,11 @@ export function createAccount(store) {
       return api('POST', { text, page }, '/feedback');
     },
     check,
+    // Recipe from a link: the server opens the page, since a browser can't open another site's.
+    async fetchPage(url) {
+      signedIn();
+      return (await api('POST', { url }, '/fetch-page')).html;
+    },
     // Web Push for the home screen version (infra/lambda/index.js /push/*). Settings subscribes
     // with the browser's pushManager; main.js uploads the reminders when they change.
     async pushKey() {

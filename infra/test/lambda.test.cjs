@@ -211,6 +211,18 @@ test('feedback is emailed to the owner with who sent it, up to 10 a day each', a
   assert.equal([...files.keys()].some((k) => k.includes('fan')), false);
 });
 
+test('recipe pages: only public web addresses, and 40 a day each', async () => {
+  assert.equal((await call('cook', 'POST', '/fetch-page', { url: 'ftp://example.com/x' })).status, 400);
+  const local = await call('cook', 'POST', '/fetch-page', { url: 'http://127.0.0.1/admin' });
+  assert.equal(local.status, 400);
+  assert.match(local.body.error, /private network/);
+  assert.equal((await call('cook', 'POST', '/fetch-page', { url: 'http://169.254.169.254/latest/meta-data' })).status, 400);
+  for (let i = 0; i < 38; i++) await call('cook', 'POST', '/fetch-page', { url: 'http://10.0.0.1/' });
+  assert.equal((await call('cook', 'POST', '/fetch-page', { url: 'http://10.0.0.1/' })).status, 429);
+  await call('cook', 'POST', '/delete-account');
+  assert.equal([...files.keys()].some((k) => k.includes('cook')), false);
+});
+
 // ---------- Web Push ----------
 const crypto = require('node:crypto');
 const b64 = (b) => Buffer.from(b).toString('base64url');

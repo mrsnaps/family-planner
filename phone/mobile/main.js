@@ -42,6 +42,12 @@ async function start() {
     await account.restore();
     if (account.status().signedIn) await Promise.race([account.syncNow(), new Promise((r) => setTimeout(r, 4000))]);
     window.FamilyPlannerAccount = account;
+    // "Recipe from a link" (web/modules/food/fetch-page.js): opened by the server when signed in;
+    // otherwise the page offers to paste the recipe instead.
+    globalThis.FamilyPlannerFetchPage = async (url) => {
+      if (!account.status().signedIn) throw Object.assign(new Error("Sign in to open recipe links, or paste the recipe page's text instead"), { status: 409 });
+      return account.fetchPage(url);
+    };
     document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && account.syncNow());
     window.addEventListener('online', () => account.syncNow());
     // While the app is open, look for other people's changes every few seconds, so a list

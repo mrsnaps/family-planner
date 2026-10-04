@@ -259,6 +259,13 @@ try {
   assert.equal(await d.page.inputValue('#feedback-form textarea'), '');
   ok('feedback from Settings is sent with who sent it');
 
+  // Recipe from a link: the app can't open other sites, so the server opens the page.
+  const { status: linkStatus, data: draft } = await d.api('/food/recipes/from-link', 'POST', { url: 'https://example.com/flapjacks' });
+  assert.equal(linkStatus, 200, JSON.stringify(draft));
+  assert.equal(draft.name, 'Mock flapjacks');
+  assert.ok(draft.ingredients.some((i) => /oats/i.test(i.name)));
+  ok('a recipe link is opened through the account when signed in');
+
   // Phone notifications (home screen version) and the Siri key, from Settings.
   const e = await open({ init: PUSH_STUB });
   await e.page.click('[data-nav="settings"]:visible');

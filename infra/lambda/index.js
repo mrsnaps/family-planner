@@ -10,16 +10,22 @@
 //        app (Web Push), sent by the same function every 15 minutes (EventBridge)
 //   POST /shortcut/key, /shortcut/key/revoke  a key for the "Hey Siri" Shortcut, which calls
 //   POST /shortcut/add { key, item }  without signing in (its own route in cloud.yaml)
+//   POST /fetch-page { url }  opens a recipe page for "Recipe from a link" (a browser can't, because
+//        of CORS); public addresses only, 2 MB and 10 seconds at most, 40 a day each
 // Each person signs in with their own email. Someone who hasn't joined a household has
 // their own, under their user id, so accounts made before households existed keep working.
 const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { CognitoIdentityProviderClient, AdminDeleteUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
 const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
 const crypto = require('crypto');
+const dns = require('dns');
+// Shared with the self-hosted server; infra/build.mjs copies it in here for the template.
+const { makeFetchPage } = require('../../web/modules/food/fetch-page'); // @inline
 const s3 = new S3Client({});
 const cognito = new CognitoIdentityProviderClient({});
 const sns = new SNSClient({});
 const FEEDBACK_PER_DAY = 10;
+const PAGES_PER_DAY = 40;
 const Bucket = process.env.BUCKET;
 const ORIGINS = process.env.ORIGINS.split(' ');
 const MAX = 2 * 1024 * 1024; // a busy household's data is well under this
@@ -62,6 +68,7 @@ const dataKey = (hid) => `households/${hid}.json`;
 const peopleKey = (hid) => `households/${hid}.members.json`;
 const inviteKey = (code) => `invites/${code}.json`;
 const feedbackKey = (sub) => `members/${sub}.feedback.json`;
+const pagesKey = (sub) => `members/${sub}.pages.json`;
 const pushKey = (sub) => `members/${sub}.push.json`;
 const shortcutKey = (sub) => `members/${sub}.shortcut.json`;
 const lookupKey = (hash) => `shortcuts/${hash}.json`;
@@ -231,11 +238,30 @@ routes['POST /feedback'] = async (me, body) => {
   return { ok: true };
 };
 
+// Recipe from a link: the app can't open other sites' pages itself, so this opens one for it.
+let fetchPage = null;
+routes['POST /fetch-page'] = async (me, body) => {
+  const url = String((body && body.url) || '').trim();
+  if (!/^https?:\/\//i.test(url) || url.length > 2000) throw fail(400, 'Use a link starting with http:// or https://');
+  const today = new Date().toISOString().slice(0, 10);
+  const used = (await getJson(pagesKey(me.sub))).value;
+  const count = used && used.day === today ? used.count : 0;
+  if (count >= PAGES_PER_DAY) throw fail(429, "That's a lot of recipe links for one day. Paste the recipe instead, or try again tomorrow.");
+  await putJson(pagesKey(me.sub), { day: today, count: count + 1 });
+  fetchPage ||= makeFetchPage({ lookup: (host) => dns.promises.lookup(host, { all: true, verbatim: true }) });
+  try {
+    return { html: await fetchPage(url) };
+  } catch (e) {
+    throw fail(e.status || 502, e.message || "Couldn't open that page");
+  }
+};
+
 routes['POST /delete-account'] = async (me) => {
   const hid = await householdOf(me.sub);
   for (const h of new Set([hid, me.sub])) await forgetHousehold(h, me);
   await purge(memberKey(me.sub));
   await purge(feedbackKey(me.sub));
+  await purge(pagesKey(me.sub));
   await purge(pushKey(me.sub));
   const siri = (await getJson(shortcutKey(me.sub))).value;
   if (siri) await purge(lookupKey(siri.hash));

@@ -100,6 +100,11 @@ export async function startMockCloud(port) {
         feedback.push({ from: email, ...JSON.parse(raw) });
         return send(res, 200, { ok: true });
       }
+      if (req.url === '/fetch-page') {
+        const { url } = JSON.parse(raw);
+        if (!/^https?:\/\//.test(url)) return send(res, 400, { error: 'Use a link starting with http:// or https://' });
+        return send(res, 200, { html: `<html><script type="application/ld+json">${JSON.stringify({ '@type': 'Recipe', name: 'Mock flapjacks', recipeYield: '12', totalTime: 'PT35M', recipeIngredient: ['250g oats', '125g butter', '100g golden syrup'], recipeInstructions: [{ '@type': 'HowToStep', text: 'Melt, stir and bake.' }] })}</script></html>` });
+      }
       if (req.url === '/push/key') return send(res, 200, { publicKey: push.publicKey });
       if (req.url.startsWith('/push/')) {
         const b = raw ? JSON.parse(raw) : {};

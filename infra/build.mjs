@@ -3,7 +3,16 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const dir = new URL('.', import.meta.url);
-const code = readFileSync(new URL('lambda/index.js', dir), 'utf8');
+// A line ending "// @inline" that requires a file of the repo is replaced by that file's
+// code, so the template stays one self-contained index.js.
+const code = readFileSync(new URL('lambda/index.js', dir), 'utf8').replace(
+  /^const (\{[^}]+\}) = require\('([^']+)'\); \/\/ @inline$/m,
+  (line, names, rel) => {
+    const src = readFileSync(new URL(rel + '.js', new URL('lambda/', dir)), 'utf8');
+    return `const ${names} = (() => {\n  const module = { exports: {} };\n${src.trimEnd().split('\n').map((l) => (l ? '  ' + l : '')).join('\n')}\n  return module.exports;\n})();`;
+  },
+);
+if (/\/\/ @inline$/m.test(code)) throw new Error('An @inline require was not replaced');
 const file = new URL('cloud.yaml', dir);
 const yaml = readFileSync(file, 'utf8');
 const INDENT = '          ';
