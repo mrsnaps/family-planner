@@ -30,19 +30,9 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           set -o pipefail
-          npm test 2>&1 | tee test-unit.log
-          npm run test:e2e 2>&1 | tee test-e2e.log
-          npm run test:web 2>&1 | tee test-web.log
-          npm run test:account 2>&1 | tee test-account.log
-
-      # The end of each test log as an annotation, so a failure can be read without the full log.
-      - name: Show where the phone tests stopped
-        if: failure() || cancelled()
-        working-directory: phone
-        run: |
-          for f in test-*.log; do
-            [ -f "$f" ] || continue
-            echo "::error title=$f::$(tail -n 25 "$f" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')"
+          for t in test test:e2e test:web test:account; do
+            echo "::notice::starting npm run $t"
+            npm run $t 2>&1 | sed -u -e '/Error\|error\|✗\|not ok\|passed/s/^/::warning::/'
           done
 
   # After the tests pass on main, publish the home screen version to Amplify.
