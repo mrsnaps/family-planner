@@ -120,6 +120,7 @@ const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria
 
 // ---------- food emoji & categories ----------
 const FOOD_CATS = [
+  ['Leftovers', '🍱', ['leftover']],
   ['Frozen', '🧊', ['frozen', 'chips', 'fish fingers', 'ice', 'nugget']],
   ['Meat & fish', '🍗', ['chicken', 'beef', 'mince', 'pork', 'lamb', 'sausage', 'bacon', 'ham', 'turkey', 'fish', 'salmon', 'tuna', 'cod', 'prawn', 'steak']],
   ['Dairy & eggs', '🧀', ['milk', 'cheese', 'cheddar', 'mozzarella', 'parmesan', 'butter', 'yoghurt', 'yogurt', 'cream', 'egg']],
@@ -527,42 +528,79 @@ async function renderFood() {
   const ready = meals.meals.filter((m) => m.status === 'ready').length;
   $('#page-sub').textContent = `${plural(stats.mealsLeft, 'meal')} left · ${ready} ready to cook · sized for ${plural(state.family.people, 'person', 'people')}` +
     (meals.dietary.length ? ` · ${meals.dietary.join(', ')}` : '');
-  const tabs = [['pantry', `What's in (${items.length})`], ['meals', `Meals (${ready})`], ['recipes', 'My recipes']];
+  state.foodPeople = meals.people || [];
+  const tabs = [['pantry', `What's in (${items.length})`], ['meals', `Meals (${ready + (meals.leftovers || []).length})`], ['lunchbox', 'Lunchboxes'], ['recipes', 'My recipes']];
   $('#page').innerHTML = `
-    <div class="seg" style="margin-bottom:16px">${tabs.map(([k, l]) => `<button data-food-view="${k}" class="${state.foodView === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+    <div class="seg" style="margin-bottom:16px">${tabs.map(([k, l]) => `<button data-food-view="${esc(k)}" class="${state.foodView === k ? 'active' : ''}">${esc(l)}</button>`).join('')}</div>
     <div id="food-body"></div>`;
   const body = $('#food-body');
   if (state.foodView === 'pantry') body.innerHTML = pantryView(items, stats);
   else if (state.foodView === 'meals') {
-    body.innerHTML = aiIdeasCard() + mealsView(meals.meals);
+    body.innerHTML = aiIdeasCard() + mealsView(meals.meals, null, meals.leftovers);
     if (ai.suggestions) {
       $('#meals-ai-status').innerHTML = '<p class="hint">✨ Asking the AI what to cook next…</p>';
       const r = await aiSuggest('meals');
-      if (r && $('#food-body') && state.foodView === 'meals') body.innerHTML = aiIdeasCard() + mealsView(meals.meals, r);
+      if (r && $('#food-body') && state.foodView === 'meals') body.innerHTML = aiIdeasCard() + mealsView(meals.meals, r, meals.leftovers);
     }
   }
-  else body.innerHTML = recipesView(recipes);
+  else if (state.foodView === 'lunchbox') {
+    const plan = await api('/food/lunchbox');
+    if (!$('#food-body') || state.foodView !== 'lunchbox') return;
+    body.innerHTML = lunchboxView(plan);
+    if (ai.suggestions && plan.children.length) {
+      $('#lunch-ai-status').innerHTML = '<p class="hint">✨ Asking the AI to plan the lunchboxes…</p>';
+      const r = await aiSuggest('lunchbox');
+      if (r && $('#food-body') && state.foodView === 'lunchbox') body.innerHTML = lunchboxView(plan, r);
+    }
+  }
+  else {
+    state.recipeRatings = (await api('/food/ratings').catch(() => ({ recipes: {} }))).recipes;
+    body.innerHTML = recipesView(recipes);
+  }
 }
+
+// How long ago, in words: "today", "3 days ago", "3 weeks ago", "4 months ago".
+function agoText(date) {
+  const d = Math.max(0, Math.round((new Date(new Date().toISOString().slice(0, 10)) - new Date(date)) / 86400000));
+  if (d === 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 14) return `${d} days ago`;
+  if (d < 60) return `${Math.round(d / 7)} weeks ago`;
+  return `${Math.round(d / 30.4)} months ago`;
+}
+const FREEZER_NUDGE_DAYS = 90;
+const PANTRY_FILTERS = [['all', 'Everything'], ['fridge', '🥕 Fridge & cupboards'], ['freezer', '🧊 Freezer'], ['leftovers', '🍱 Leftovers']];
 
 function pantryView(items, stats) {
   const unmatched = new Set(stats.unmatched);
   const today = new Date().toISOString().slice(0, 10);
+  const f = state.pantryFilter || 'all';
+  const counts = { all: items.length, fridge: items.filter((i) => !i.frozen && !i.leftover).length, freezer: items.filter((i) => i.frozen).length, leftovers: items.filter((i) => i.leftover).length };
+  const all = items;
+  items = items.filter((i) => f === 'all' ? true : f === 'freezer' ? i.frozen : f === 'leftovers' ? i.leftover : !i.frozen && !i.leftover);
   const groups = {};
-  for (const it of items) (groups[foodCat(it.name).cat] ||= []).push(it);
+  for (const it of items) (groups[it.leftover ? 'Leftovers' : foodCat(it.name).cat] ||= []).push(it);
   const order = [...FOOD_CATS.map((c) => c[0]), 'Other'];
   const days = (d) => Math.round((new Date(d) - new Date(today)) / 86400000);
+  const filters = `<div class="chips" style="margin-bottom:12px">${PANTRY_FILTERS.map(([k, l]) => `<button class="chip ${f === k ? 'active' : ''}" data-pantry-filter="${esc(k)}">${esc(l)} <span class="muted">${esc(counts[k])}</span></button>`).join('')}</div>`;
   const list = items.length ? order.filter((g) => groups[g]).map((g) => `
-    <div class="group-title">${g}</div>
+    <div class="group-title">${esc(g)}</div>
     <ul class="list">${groups[g].map((it) => {
-      const dl = it.expiry ? days(it.expiry) : null;
-      const exp = dl === null ? '' : dl < 0 ? '<span class="pill bad">Out of date</span>' : dl <= 3 ? `<span class="pill warn">${dl === 0 ? 'Use today' : 'Use in ' + plural(dl, 'day')}</span>` : '';
+      const dl = it.expiry && !it.frozen ? days(it.expiry) : null;
+      const exp = dl === null ? '' : dl < 0 ? '<span class="pill bad">Out of date</span>' : dl <= 3 ? `<span class="pill warn">${dl === 0 ? 'Use today' : 'Use in ' + esc(plural(dl, 'day'))}</span>` : '';
+      const frozenFor = it.frozen ? -days(it.frozen) : 0;
+      const frz = it.frozen ? `<span class="pill blue">🧊 Frozen ${esc(agoText(it.frozen))}</span>${frozenFor >= FREEZER_NUDGE_DAYS ? ' <span class="pill warn">Use soon</span>' : ''}` : '';
+      const sub = it.frozen ? `In the freezer since ${esc(fmtDate(it.frozen))}`
+        : it.expiry ? 'Use by ' + esc(fmtDate(it.expiry)) : 'No use-by date';
+      const from = it.leftover ? ` · cooked ${esc(agoText(it.leftover.cookedAt || today))}` : '';
       return `
       <li class="row">
-        <span class="emoji">${foodCat(it.name).emoji}</span>
+        <span class="emoji">${it.leftover ? '🍱' : foodCat(it.name).emoji}</span>
         <div class="grow">
-          <div class="title">${esc(it.name)} ${exp}</div>
-          <div class="sub">${it.expiry ? 'Use by ' + fmtDate(it.expiry) : 'No use-by date'}${unmatched.has(it.name) ? ' · not in any recipe yet' : ''}</div>
+          <div class="title">${esc(it.name)} ${exp}${frz}</div>
+          <div class="sub">${sub}${from}${unmatched.has(it.name) && !it.leftover ? ' · not in any recipe yet' : ''}</div>
         </div>
+        <button class="icon-btn" data-freeze="${esc(it.id)}" data-state="${it.frozen ? 'true' : 'false'}" aria-label="${it.frozen ? 'Take out of the freezer' : 'Put in the freezer'}: ${esc(it.name)}" title="${it.frozen ? 'Take out of the freezer' : 'Put in the freezer'}">${it.frozen ? '🔥' : '❄️'}</button>
         <div class="stepper">
           <button data-step="${esc(it.id)}" data-delta="-1" aria-label="Less">−</button>
           <input type="number" step="any" min="0" value="${esc(it.quantity)}" data-qty="${esc(it.id)}" aria-label="Quantity of ${esc(it.name)}">
@@ -571,7 +609,9 @@ function pantryView(items, stats) {
         <span class="small muted unit" style="width:30px">${esc(it.unit)}</span>
         <button class="icon-btn danger" data-del-food="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">${icon('trash')}</button>
       </li>`;
-    }).join('')}</ul>`).join('') : emptyState('🥫', 'Nothing in yet. Add items, scan a barcode, or snap a photo.');
+    }).join('')}</ul>`).join('')
+    : all.length ? emptyState(f === 'freezer' ? '🧊' : f === 'leftovers' ? '🍱' : '🥫', f === 'freezer' ? 'Nothing in the freezer. Tap ❄️ on anything you freeze.' : f === 'leftovers' ? 'No leftovers. After cooking, say how much is left and it shows up here.' : 'Nothing here.')
+      : emptyState('🥫', 'Nothing in yet. Add items, scan a barcode, or snap a photo.');
 
   return `
     <div class="split">
@@ -588,6 +628,7 @@ function pantryView(items, stats) {
             <label class="field">Unit<select name="unit">${options(state.units, 'pcs')}</select></label>
           </div>
           <label class="field">Use by (optional)<input name="expiry" type="date"></label>
+          <label class="chip" style="align-self:flex-start"><input type="checkbox" name="frozen" value="true" style="width:auto"> 🧊 It's going in the freezer</label>
           <button class="btn primary">${icon('plus')} Add to cupboard</button>
         </form>
         <datalist id="food-names">${QUICK_ADD.map(([n]) => `<option value="${esc(n)}">`).join('')}</datalist>
@@ -596,7 +637,8 @@ function pantryView(items, stats) {
         <div class="chips">${QUICK_ADD.map(([n], i) => `<button class="chip" data-quick="${i}">${foodCat(n).emoji} ${esc(n)}</button>`).join('')}</div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>In the cupboards</h2><span class="muted small">${plural(items.length, 'item')}</span></div>
+        <div class="card-head"><h2>In the cupboards</h2><span class="muted small">${esc(plural(items.length, 'item'))}</span></div>
+        ${filters}
         ${list}
       </div>
     </div>`;
@@ -635,7 +677,41 @@ function aiIdeasCard() {
   </div>`;
 }
 
-function mealsView(meals, ai = null) {
+// What the family thought of a meal: 👍 3 · 😐 1 · 👎 1, and who isn't keen.
+function ratingChips(r) {
+  if (!r || !(r.up + r.meh + r.down)) return '';
+  const counts = [['👍', r.up], ['😐', r.meh], ['👎', r.down]].filter(([, n]) => n).map(([e, n]) => `${e} ${esc(n)}`).join(' · ');
+  return `<span class="pill plain" title="What the family thought">${counts}</span>${notKeenPill(r)}`;
+}
+function notKeenPill(r) {
+  const list = (r && r.notKeen) || [];
+  if (!list.length) return '';
+  const who = list.length === 1 ? list[0] : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+  return ` <span class="pill warn">${esc(who)} ${list.length === 1 ? "isn't" : "aren't"} keen</span>`;
+}
+
+function leftoverCards(leftovers) {
+  if (!leftovers || !leftovers.length) return '';
+  const today = new Date().toISOString().slice(0, 10);
+  return leftovers.map((l) => {
+    const dl = l.expiry ? Math.round((new Date(l.expiry) - new Date(today)) / 86400000) : null;
+    const when = l.frozen ? `<span class="pill blue">🧊 Frozen ${esc(agoText(l.frozen))}</span>`
+      : dl === null ? '' : dl < 0 ? '<span class="pill bad">Past its use-by</span>' : `<span class="pill warn">${dl === 0 ? 'Eat today' : dl === 1 ? 'Eat by tomorrow' : 'Eat in ' + esc(plural(dl, 'day'))}</span>`;
+    return `
+      <div class="card meal-card">
+        <div class="top"><span class="emoji">🍱</span>
+          <div class="grow" style="flex:1;min-width:0"><div class="name">${esc(l.name)}</div>
+            <div class="meta"><span>${esc(l.portions ?? '?')} portion${Number(l.portions) === 1 ? '' : 's'}</span><span>Already cooked</span></div></div></div>
+        <div class="chips"><span class="pill">Eat these first</span>${when}</div>
+        <div class="actions">
+          <button class="btn primary sm" data-eat-leftover="${esc(l.id)}">${icon('check')} We ate it</button>
+          <button class="btn sm" data-freeze="${esc(l.id)}" data-state="${l.frozen ? 'true' : 'false'}">${l.frozen ? '🔥 Defrost' : '❄️ Freeze'}</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function mealsView(meals, ai = null, leftovers = []) {
   // With AI picks, the AI's choices come first, each saying why.
   const picks = ai && !ai.error ? ai.picks : [];
   const why = new Map(picks.map((p) => [p.id, p.why]));
@@ -659,7 +735,7 @@ function mealsView(meals, ai = null) {
           <button class="icon-btn star ${m.favourite ? 'on' : ''}" data-fav="${esc(m.id)}" data-state="${m.favourite}" aria-label="${m.favourite ? 'Remove from' : 'Add to'} favourites" title="Family favourite">${m.favourite ? '★' : '☆'}</button>
         </div>
         ${why.has(m.id) ? `<div class="small" style="color:var(--accent);font-weight:600">✨ ${esc(why.get(m.id))}</div>` : ''}
-        <div class="chips">${why.has(m.id) ? '<span class="pill blue">✨ AI pick</span>' : ''}${tag}${m.usesExpiring ? '<span class="pill warn">Uses food going off</span>' : ''}${m.diet.filter((d) => d !== 'nut-free').map((d) => `<span class="pill plain">${DIET_LABEL[d]}</span>`).join('')}</div>
+        <div class="chips">${why.has(m.id) ? '<span class="pill blue">✨ AI pick</span>' : ''}${tag}${m.usesExpiring ? '<span class="pill warn">Uses food going off</span>' : ''}${m.diet.filter((d) => d !== 'nut-free').map((d) => `<span class="pill plain">${esc(DIET_LABEL[d])}</span>`).join('')}${ratingChips(m.rating)}</div>
         ${m.missing.length ? `<div class="small">Missing: <strong>${m.missing.map(esc).join(', ')}</strong></div>` : ''}
         ${m.short.length ? `<div class="small">Short: ${m.short.map((s) => `${esc(s.name)} (${esc(s.have)}/${esc(s.need)} ${esc(s.unit)})`).join(', ')}</div>` : ''}
         <details><summary>Ingredients for your family</summary>
@@ -674,28 +750,47 @@ function mealsView(meals, ai = null) {
   return `
     <div id="meals-ai-status">${picks.length ? `<p class="hint" style="margin-bottom:10px">✨ Ordered by ${esc(ai.by)}: what to cook next comes first. <button class="btn ghost sm" data-ai-refresh="meals">Ask again</button></p>` : aiNote(ai, 'meals')}</div>
     <div class="chips" style="margin-bottom:16px">${filters.map(([k, l]) => `<button class="chip ${f === k ? 'active' : ''}" data-meal-filter="${k}">${l}</button>`).join('')}</div>
+    ${leftovers.length && ['all', 'ready'].includes(f) ? `<div class="group-title">Leftovers to eat first</div><div class="meal-grid" style="margin-bottom:16px">${leftoverCards(leftovers)}</div>` : ''}
     ${shown.length ? `<div class="meal-grid">${shown.map(card).join('')}</div>` : `<div class="card">${emptyState('🍽️', f === 'favourites' ? 'Tap the ☆ on a meal the kids love to make it a favourite.' : 'No meals match yet. Add more food to the cupboard.')}</div>`}`;
 }
 
 function recipesView(recipes) {
   const mine = recipes.filter((r) => !r.builtin);
-  const unitOpts = options(state.units.filter((u) => u !== 'each'), 'g');
+  const units = state.units.filter((u) => u !== 'each' && u !== 'portion');
+  const unitOpts = options(units, 'g');
+  const draft = state.recipeDraft;
+  const tag = draft ? (draft.tags || []).find((t) => ['dinner', 'lunch', 'breakfast'].includes(t)) || 'dinner' : 'dinner';
+  const ingRow = (g) => `
+            <div class="ing-row">
+              <input name="ing-name" placeholder="Ingredient" required value="${esc(g.name)}" title="${esc(g.original || '')}">
+              <input name="ing-qty" type="number" step="any" min="0" placeholder="Qty" required value="${esc(g.qty)}">
+              <select name="ing-unit">${options(units, units.includes(g.unit) ? g.unit : 'pcs')}</select>
+              <label class="small muted opt" style="display:flex;gap:4px;align-items:center"><input type="checkbox" name="ing-opt" style="width:auto" ${g.optional ? 'checked' : ''}> optional</label>
+              <button type="button" class="icon-btn danger" data-del-ing aria-label="Remove ingredient">${icon('x')}</button>
+            </div>`;
+  let host = '';
+  try { host = draft && draft.source ? new URL(draft.source).hostname : ''; } catch {}
   return `
     <div class="split">
-      <div class="card">
-        <div class="card-head"><h2>Add a recipe</h2></div>
+      <div class="stack" style="gap:16px">
+      ${draft ? '' : recipeLinkCard()}
+      <div class="card" id="recipe-card">
+        <div class="card-head"><h2>${draft ? 'Check the recipe' : 'Add a recipe'}</h2>${draft ? `<button type="button" class="btn ghost sm" data-recipe-draft-cancel>Cancel</button>` : ''}</div>
+        ${draft ? `<p class="hint" style="margin-bottom:10px">${host ? `From ${esc(host)}. ` : ''}Check the amounts and names (they're matched to what's in your cupboards), then save.</p>` : ''}
         <form id="recipe-form" class="stack">
-          <label class="field">Name<input name="name" required placeholder="e.g. Grandma's fish pie"></label>
+          <label class="field">Name<input name="name" required placeholder="e.g. Grandma's fish pie" value="${esc(draft ? draft.name : '')}"></label>
           <div class="form-row" style="grid-template-columns:1fr 1fr">
-            <label class="field">Serves<input name="servings" type="number" min="1" value="4"></label>
-            <label class="field">Minutes<input name="minutes" type="number" min="1" value="30"></label>
+            <label class="field">Serves<input name="servings" type="number" min="1" value="${esc(draft ? draft.servings : 4)}"></label>
+            <label class="field">Minutes<input name="minutes" type="number" min="1" value="${esc(draft ? draft.minutes : 30)}"></label>
           </div>
           <label class="field">Type
-            <select name="tag"><option value="dinner">Dinner</option><option value="lunch">Lunch</option><option value="breakfast">Breakfast</option></select></label>
-          <label class="chip" style="align-self:flex-start"><input type="checkbox" name="vegetarian" style="width:auto"> Vegetarian</label>
+            <select name="tag">${options(['dinner', 'lunch', 'breakfast'], tag, { dinner: 'Dinner', lunch: 'Lunch', breakfast: 'Breakfast' })}</select></label>
+          <label class="chip" style="align-self:flex-start"><input type="checkbox" name="vegetarian" style="width:auto" ${draft && (draft.tags || []).includes('vegetarian') ? 'checked' : ''}> Vegetarian</label>
           <div class="group-title">Ingredients</div>
-          <div id="ing-rows" class="stack"></div>
+          <div id="ing-rows" class="stack">${draft ? draft.ingredients.map(ingRow).join('') : ''}</div>
           <button type="button" class="btn sm" id="add-ing" style="align-self:flex-start">${icon('plus')} Add ingredient</button>
+          <label class="field">Method (optional, one step per line)<textarea name="steps" rows="${draft && draft.steps.length ? Math.min(12, draft.steps.length + 1) : 3}" placeholder="Boil the pasta&#10;Fry the onion">${esc(draft ? draft.steps.join('\n') : '')}</textarea></label>
+          ${draft && draft.source ? `<input type="hidden" name="source" value="${esc(draft.source)}">` : ''}
           <button class="btn primary">${icon('book')} Save recipe</button>
           <template id="ing-tpl">
             <div class="ing-row">
@@ -708,16 +803,17 @@ function recipesView(recipes) {
           </template>
         </form>
       </div>
+      </div>
       <div class="card">
-        <div class="card-head"><h2>Your recipes</h2><span class="muted small">Plus ${recipes.length - mine.length} built-in</span></div>
+        <div class="card-head"><h2>Your recipes</h2><span class="muted small">Plus ${esc(recipes.length - mine.length)} built-in</span></div>
         ${mine.length ? `<ul class="list">${mine.map((r) => `
           <li class="row"><span class="emoji">${MEAL_EMOJI(r.name)}</span>
-            <div class="grow"><div class="title">${esc(r.name)}</div>
+            <div class="grow"><div class="title">${esc(r.name)} ${ratingChips(state.recipeRatings && state.recipeRatings[r.id])}</div>
               <div class="sub">Serves ${esc(r.servings)} · ${esc(r.minutes)} min · ${r.ingredients.map((i) => esc(i.name)).join(', ')}</div></div>
             <button class="icon-btn danger" data-del-recipe="${esc(r.id)}" aria-label="Delete ${esc(r.name)}">${icon('trash')}</button>
           </li>`).join('')}</ul>` : emptyState('📖', 'Add your family favourites and they will show up in meal ideas.')}
         <div class="group-title" style="margin-top:20px">Built-in recipes</div>
-        <div class="chips">${recipes.filter((r) => r.builtin).map((r) => `<span class="pill plain">${MEAL_EMOJI(r.name)} ${esc(r.name)}</span>`).join('')}</div>
+        <div class="chips">${recipes.filter((r) => r.builtin).map((r) => `<span class="pill plain">${MEAL_EMOJI(r.name)} ${esc(r.name)}</span>${notKeenPill(state.recipeRatings && state.recipeRatings[r.id])}`).join('')}</div>
       </div>
     </div>`;
 }
@@ -740,6 +836,166 @@ function amountText({ amount, unit }) {
   if (unit === 'tsp') return amount >= 3 ? `${Math.round(amount / 3)} tbsp` : `${amount} tsp`;
   return `${amount} ${unit}${amount === 1 || unit.endsWith('s') ? '' : 's'}`;
 }
+
+// ---------- food: ratings, leftovers, lunchboxes, recipes from links ----------
+// After "Cooked it": everyone gives the dinner a 👍 😐 👎, and any leftovers are saved
+// (2 days in the fridge, or the freezer).
+async function afterCook({ recipe, people = [] } = {}) {
+  if (!recipe) return;
+  const faces = [['1', '👍', 'Loved it'], ['0', '😐', 'It was OK'], ['-1', '👎', 'Not keen']];
+  const rows = people.map((p) => `
+    <div class="rate-row"><span class="who">${esc(p.name)}</span>
+      <div class="rate-btns" role="radiogroup" aria-label="${esc(p.name)}">${faces.map(([v, e, l]) =>
+        `<label title="${esc(l)}"><input type="radio" name="rate-${esc(p.id)}" value="${esc(v)}" aria-label="${esc(p.name)}: ${esc(l)}"><span>${e}</span></label>`).join('')}</div>
+    </div>`).join('');
+  const got = await ask({
+    title: 'How was dinner?',
+    ok: 'Save',
+    body: `<p><strong>${esc(recipe.name)}</strong></p>
+      ${people.length ? `<p class="muted small" style="margin:4px 0 8px">Everyone can tap a face. Meals the family likes come up more often.</p>${rows}` : ''}
+      <div class="group-title" style="margin-top:14px">Save leftovers</div>
+      <div class="form-row" style="grid-template-columns:1fr 1fr">
+        <label class="field">Portions left<input name="portions" type="number" min="0" step="0.5" placeholder="0" inputmode="decimal"></label>
+        <label class="field">Keep them in<select name="where"><option value="fridge">The fridge (2 days)</option><option value="freezer">The freezer</option></select></label>
+      </div>`,
+  });
+  if (!got) return;
+  const ratings = people.filter((p) => got['rate-' + p.id] !== undefined).map((p) => ({ personId: p.id, score: Number(got['rate-' + p.id]) }));
+  const done = [];
+  if (ratings.length) {
+    await api('/food/ratings', { method: 'POST', body: { recipeId: recipe.id, ratings } });
+    done.push('Thanks for the ratings');
+  }
+  if (Number(got.portions) > 0) {
+    await api('/food/leftovers', { method: 'POST', body: { recipeId: recipe.id, portions: Number(got.portions), freeze: got.where === 'freezer' } });
+    done.push(got.where === 'freezer' ? 'Leftovers are in the freezer' : 'Leftovers are in the fridge: eat them in the next 2 days');
+  }
+  if (done.length) {
+    toast(done.join('. '));
+    await renderFood();
+  }
+}
+
+const LUNCH_SLOTS = [['main', '🥪', 'Main'], ['snack', '🍪', 'Snack'], ['fruit', '🍎', 'Fruit or veg'], ['drink', '🧃', 'Drink']];
+
+// The week's lunchboxes: the rules' plan at once; the AI's answer, when there is one, fills
+// each slot it planned, and the rules fill the rest.
+function lunchboxView(plan, ai = null) {
+  const useAi = ai && !ai.error;
+  if (!plan.children.length) {
+    const why = plan.notAtSchool.length ? `${plan.notAtSchool.join(' and ')} ${plan.notAtSchool.length === 1 ? "isn't" : "aren't"} at school yet, so there are no lunchboxes to plan.` : 'Add your children to plan their school lunchboxes.';
+    return `<div class="card">${emptyState('🥪', esc(why), plan.notAtSchool.length ? '' : '<button class="btn primary" data-nav="family">Add a child</button>')}</div>`;
+  }
+  let gaps = false;
+  const kids = plan.children.map((c) => {
+    const a = useAi ? (ai.children || []).find((x) => x.childId === c.childId) : null;
+    const days = c.days.map((d, i) => {
+      const out = { ...d };
+      for (const [k] of LUNCH_SLOTS) {
+        if (a && a.days[i] && a.days[i][k]) out[k] = a.days[i][k];
+        if (!out[k]) gaps = true;
+      }
+      return out;
+    });
+    return { ...c, days };
+  });
+  const rulesMissing = plan.missing.map((m) => m.name);
+  const missing = useAi ? [...new Set([...(ai.toBuy || []), ...(gaps ? rulesMissing : [])])] : rulesMissing;
+  const slot = (s, emoji, label) => `<div title="${esc(label)}">${emoji} ${s ? esc(s.name) : '<span class="muted">Nothing in for this</span>'}</div>`;
+  const status = useAi
+    ? `<p class="hint">✨ Planned by ${esc(ai.by)} from what's in. <button class="btn ghost sm" data-ai-refresh="lunchbox">Ask again</button></p>`
+    : ai?.error ? aiNote(ai, 'lunchboxes') : '<p class="hint">Planned from what\'s in: a main, a snack, fruit or veg and a drink, varied through the week and leaving out what each child won\'t eat.</p>';
+  return `
+    <div id="lunch-ai-status" style="margin-bottom:12px">${status}</div>
+    ${missing.length ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>🛒 To fill every lunchbox</h2></div>
+      <div class="chips" style="margin-bottom:12px">${missing.map((n) => `<span class="pill warn">${esc(n)}</span>`).join('')}</div>
+      <button class="btn" data-shop-missing="${esc(JSON.stringify(missing))}">${icon('cart')} Add what's missing to the shopping list</button></div>` : ''}
+    ${kids.map((c) => `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h2>🎒 ${esc(c.name)}</h2></div>
+        <div class="lunch-grid">${c.days.map((d) => `
+          <div class="lunch-day"><div class="dname">${esc(d.day)}</div>${LUNCH_SLOTS.map(([k, e, l]) => slot(d[k], e, l)).join('')}</div>`).join('')}</div>
+        <form class="wont-eat-form form-row" data-child="${esc(c.childId)}" style="grid-template-columns:1fr auto;margin-top:12px">
+          <label class="field">${esc(c.name)} won't eat<input name="foods" value="${esc((c.wontEat || []).join(', '))}" placeholder="e.g. tuna, tomatoes" ${NOFILL}></label>
+          <button class="btn sm" style="align-self:end">Save</button>
+        </form>
+      </div>`).join('')}
+    ${plan.notAtSchool.length ? `<p class="hint">${esc(plan.notAtSchool.join(' and '))} ${plan.notAtSchool.length === 1 ? "isn't" : "aren't"} at school yet, so ${plan.notAtSchool.length === 1 ? 'has' : 'have'} no lunchbox.</p>` : ''}
+    <p class="hint">Dinners a child isn't keen on count too: their main ingredients are left out of that child's lunchbox.</p>`;
+}
+
+function recipeLinkCard() {
+  return `<div class="card">
+    <div class="card-head"><h2>🔗 Add from a link</h2></div>
+    <form id="recipe-link-form" class="form-row" style="grid-template-columns:1fr auto">
+      <input name="url" type="url" inputmode="url" required placeholder="Paste a recipe page's address" aria-label="Recipe page address" ${NOFILL}>
+      <button class="btn primary" ${state.recipeLinkBusy ? 'disabled' : ''}>${state.recipeLinkBusy ? 'Reading…' : 'Get recipe'}</button>
+    </form>
+    ${state.recipePaste ? `<form id="recipe-paste-form" class="stack" style="margin-top:12px">
+      <p class="hint">${esc(state.recipePaste)}</p>
+      <textarea name="html" rows="7" required placeholder="Ingredients&#10;400g spaghetti&#10;1 onion, chopped&#10;&#10;Method&#10;Boil the pasta…" aria-label="Recipe text"></textarea>
+      <button class="btn">${icon('book')} Read the recipe</button>
+    </form>` : `<p class="hint" style="margin-top:8px">The recipe is read from the page, and you can check it before saving. <button type="button" class="btn ghost sm" data-recipe-paste>Paste it instead</button></p>`}
+  </div>`;
+}
+
+async function recipeFromLink(body) {
+  state.recipeLinkBusy = true;
+  try {
+    state.recipeDraft = await api('/food/recipes/from-link', { method: 'POST', body });
+    state.recipePaste = null;
+  } catch (e) {
+    if (/paste the recipe page/i.test(e.message)) {
+      state.recipePaste = "Recipe pages can't be opened from here, so paste the recipe instead: on the recipe page, select everything (or just the ingredients and method), copy it and paste it below.";
+    } else {
+      state.recipePaste = `${e.message}. You can paste the recipe here instead.`;
+    }
+  } finally {
+    state.recipeLinkBusy = false;
+  }
+  await renderFood();
+  if (state.recipeDraft) $('#recipe-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  else $('#recipe-paste-form textarea')?.focus();
+}
+
+document.addEventListener('click', guard(async (e) => {
+  const t = e.target.closest('button');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.pantryFilter) { state.pantryFilter = d.pantryFilter; return renderFood(); }
+  if (d.freeze) {
+    const freeze = d.state !== 'true';
+    await api('/food/items/' + d.freeze, { method: 'PUT', body: { frozen: freeze } });
+    toast(freeze ? 'In the freezer' : 'Out of the freezer. Leftovers should be eaten within a day.');
+    return renderFood();
+  }
+  if (d.eatLeftover) {
+    const r = await api(`/food/leftovers/${d.eatLeftover}/eat`, { method: 'POST', body: {} });
+    toast(r.left ? `${plural(r.left, 'portion')} still left` : 'All gone');
+    return renderFood();
+  }
+  if (t.hasAttribute('data-recipe-paste')) {
+    state.recipePaste = 'Copy the recipe from the page (or just its ingredients and method) and paste it here.';
+    await renderFood();
+    return $('#recipe-paste-form textarea')?.focus();
+  }
+  if (t.hasAttribute('data-recipe-draft-cancel')) {
+    state.recipeDraft = null;
+    return renderFood();
+  }
+}));
+
+document.addEventListener('submit', guard(async (e) => {
+  const form = e.target;
+  if (!(form.id === 'recipe-link-form' || form.id === 'recipe-paste-form' || form.classList.contains('wont-eat-form'))) return;
+  e.preventDefault();
+  const body = formData(form);
+  if (form.id === 'recipe-link-form') return recipeFromLink({ url: body.url });
+  if (form.id === 'recipe-paste-form') return recipeFromLink({ html: body.html });
+  const r = await api('/food/lunchbox/wont-eat', { method: 'PUT', body: { childId: form.dataset.child, foods: body.foods } });
+  toast(r.foods.length ? `Saved. Leaving out ${r.foods.join(', ')}` : 'Saved');
+  return renderFood();
+}));
 
 // ---------- clothes ----------
 // Today's weather for the family's town, from Open-Meteo (free, no key). Cached for the day.
@@ -1381,9 +1637,10 @@ document.addEventListener('click', guard(async (e) => {
   }
   if (d.delFood) { await api('/food/items/' + d.delFood, { method: 'DELETE' }); return renderFood(); }
   if (d.cook) {
-    await api(`/food/meals/${d.cook}/cook`, { method: 'POST' });
+    const cooked = await api(`/food/meals/${d.cook}/cook`, { method: 'POST' });
     toast('Enjoy! Ingredients taken out of the cupboard.');
-    return renderFood();
+    await renderFood();
+    return afterCook(cooked);
   }
   if (d.shopMissing) {
     for (const name of JSON.parse(d.shopMissing)) await api('/shopping/items', { method: 'POST', body: { name, kind: 'food' } });
@@ -1666,10 +1923,12 @@ document.addEventListener('submit', guard(async (e) => {
       optional: r.querySelector('[name=ing-opt]').checked,
     }));
     if (!ingredients.length) throw new Error('Add at least one ingredient');
+    const steps = String(body.steps || '').split('\n').map((s) => s.trim()).filter(Boolean);
     await api('/food/recipes', {
       method: 'POST',
-      body: { name: body.name, servings: body.servings, minutes: body.minutes, tags: [body.tag, ...(body.vegetarian ? ['vegetarian'] : [])], ingredients },
+      body: { name: body.name, servings: body.servings, minutes: body.minutes, tags: [body.tag, ...(body.vegetarian ? ['vegetarian'] : [])], ingredients, steps, ...(body.source ? { source: body.source } : {}) },
     });
+    state.recipeDraft = null;
     toast('Recipe saved. It will show up in meal ideas.');
     await renderFood();
   } else if (form.id === 'clothes-form') {

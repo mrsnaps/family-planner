@@ -11,6 +11,7 @@ const UNITS = {
   tin: ['tin', 1], can: ['tin', 1],
   pack: ['pack', 1],
   tbsp: ['spoon', 3], tsp: ['spoon', 1],
+  portion: ['portion', 1],
 };
 const unitInfo = (u) => UNITS[String(u || '').trim().toLowerCase()] || [String(u).toLowerCase(), 1];
 
@@ -64,11 +65,40 @@ function conceptsFor(itemName, index) {
   return found;
 }
 
+// ---- leftovers, freezer and ratings ---------------------------------------
+// Leftovers are portions of a cooked meal, kept apart from ingredients. Food in the
+// freezer keeps for months, so its use-by date doesn't count while it's frozen.
+const isLeftover = (item) => Boolean(item && item.leftover);
+const useBy = (item) => (item.frozen ? null : item.expiry || null);
+const FREEZER_NUDGE_DAYS = 90;
+
+// How much the family likes a recipe, from their ratings and favourites: liked meals rise,
+// disliked ones sink, and a meal someone isn't keen on sinks further.
+function preference(id, fav, ratings) {
+  const r = ratings && ratings[id];
+  const liked = r ? Math.max(-3, Math.min(3, r.score || 0)) : 0;
+  return (fav.has(id) ? 2 : 0) + liked - (r ? 3 * (r.notKeen || []).length : 0);
+}
+
+// Leftover meals waiting to be eaten, fridge ones first (soonest use-by), then the freezer's.
+function leftoverMeals(pantry, portions, today) {
+  return pantry
+    .filter((p) => isLeftover(p) && p.quantity !== 0)
+    .map((p) => {
+      const n = Number(p.quantity);
+      const meals = Number.isFinite(n) && n > 0 ? Math.max(1, Math.floor(n / Math.max(1, portions) + 0.01)) : 1;
+      return { item: p, meals, sort: p.frozen ? `2${p.frozen}` : `1${p.expiry || '9999'}` };
+    })
+    .sort((a, b) => a.sort.localeCompare(b.sort));
+}
+const leftoverName = (p) => p.name || `Leftover ${(p.leftover && p.leftover.recipeName) || 'dinner'}`;
+
 // ---- stock simulation ----------------------------------------------------
 // A "stock" is a working copy of the pantry: concept -> list of lots.
 function makeStock(pantry, index) {
   const stock = new Map();
   for (const item of pantry) {
+    if (isLeftover(item)) continue;
     const [family, factor] = unitInfo(item.unit);
     const qty = Number(item.quantity);
     const lot = {
@@ -76,7 +106,7 @@ function makeStock(pantry, index) {
       name: item.name,
       family,
       amount: Number.isFinite(qty) && qty > 0 ? qty * factor : null,
-      expiry: item.expiry || null,
+      expiry: useBy(item),
     };
     if (lot.amount === null && Number(item.quantity) === 0) continue; // used up
     for (const c of conceptsFor(item.name, index)) {
@@ -146,7 +176,7 @@ const baseUnit = (family) => ({ mass: 'g', vol: 'ml', count: 'pcs', tin: 'tin', 
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 
 // ---- public API ----------------------------------------------------------
-function suggestMeals(pantry, recipes, portions, { today = new Date().toISOString().slice(0, 10), maxMissing = 2, favourites = [], indexRecipes = recipes } = {}) {
+function suggestMeals(pantry, recipes, portions, { today = new Date().toISOString().slice(0, 10), maxMissing = 2, favourites = [], indexRecipes = recipes, ratings = {} } = {}) {
   const index = buildIndex(indexRecipes);
   const fav = new Set(favourites);
   const stock = makeStock(pantry, index);
@@ -166,6 +196,8 @@ function suggestMeals(pantry, recipes, portions, { today = new Date().toISOStrin
       usesExpiring: e.usesExpiring,
       builtin: recipe.builtin !== false,
       favourite: fav.has(recipe.id),
+      rating: ratings[recipe.id] || null,
+      preference: preference(recipe.id, fav, ratings),
       diet: dietFlags(recipe),
       ingredients: recipe.ingredients.map((ing) => {
         const { family, amount } = needFor(ing, recipe, portions);
@@ -177,7 +209,7 @@ function suggestMeals(pantry, recipes, portions, { today = new Date().toISOStrin
   out.sort((a, b) =>
     rank[a.status] - rank[b.status] ||
     Number(b.usesExpiring) - Number(a.usesExpiring) ||
-    Number(b.favourite) - Number(a.favourite) ||
+    b.preference - a.preference ||
     a.missing.length - b.missing.length ||
     a.minutes - b.minutes
   );
@@ -186,19 +218,25 @@ function suggestMeals(pantry, recipes, portions, { today = new Date().toISOStrin
 
 // Greedy plan: keep cooking the best ready meal (prefer ones that use food about
 // to expire, then ones cooked least) until nothing more can be made.
-function estimateMeals(pantry, recipes, portions, { today = new Date().toISOString().slice(0, 10), cap = 60, favourites = [], indexRecipes = recipes } = {}) {
+function estimateMeals(pantry, recipes, portions, { today = new Date().toISOString().slice(0, 10), cap = 60, favourites = [], indexRecipes = recipes, ratings = {} } = {}) {
   const index = buildIndex(indexRecipes);
   const fav = new Set(favourites);
   const stock = makeStock(pantry, index);
   const cooked = new Map();
   const plan = [];
+  // Leftovers come first: they're already cooked and won't keep long.
+  for (const { item, meals } of leftoverMeals(pantry, portions, today)) {
+    for (let i = 0; i < meals && plan.length < cap; i++) {
+      plan.push({ id: `leftover:${item.id}`, name: leftoverName(item), leftover: true, itemId: item.id, recipeId: item.leftover.recipeId || null });
+    }
+  }
   const mains = recipes.filter((r) => !(r.tags || []).includes('breakfast'));
   while (plan.length < cap) {
     let best = null;
     for (const recipe of mains) {
       const e = evaluate(recipe, portions, stock, today);
       if (e.missing.length || e.short.length) continue;
-      const score = (e.usesExpiring ? 100 : 0) - 10 * (cooked.get(recipe.id) || 0) + (fav.has(recipe.id) ? 5 : 0) +
+      const score = (e.usesExpiring ? 100 : 0) - 10 * (cooked.get(recipe.id) || 0) + 2.5 * preference(recipe.id, fav, ratings) +
         e.checks.filter((c) => !c.untracked).length;
       if (!best || score > best.score) best = { recipe, e, score };
     }
@@ -208,28 +246,41 @@ function estimateMeals(pantry, recipes, portions, { today = new Date().toISOStri
     plan.push({ id: best.recipe.id, name: best.recipe.name });
   }
 
+  // Ingredients going off. Leftovers have their own list (and reminders) below.
   const expiringSoon = pantry
-    .filter((p) => p.expiry && daysBetween(today, p.expiry) <= 3)
+    .filter((p) => useBy(p) && !isLeftover(p) && daysBetween(today, p.expiry) <= 3)
     .map((p) => ({ id: p.id, name: p.name, expiry: p.expiry, days: daysBetween(today, p.expiry) }))
     .sort((a, b) => a.days - b.days);
 
-  const unmatched = pantry.filter((p) => conceptsFor(p.name, index).size === 0).map((p) => p.name);
+  const unmatched = pantry.filter((p) => !isLeftover(p) && conceptsFor(p.name, index).size === 0).map((p) => p.name);
 
+  const leftovers = pantry.filter((p) => isLeftover(p) && p.quantity !== 0).map((p) => ({
+    id: p.id, name: leftoverName(p), recipeId: p.leftover.recipeId || null, portions: p.quantity, expiry: useBy(p), frozen: p.frozen || null,
+    days: useBy(p) ? daysBetween(today, p.expiry) : null,
+  }));
+  const freezer = pantry.filter((p) => p.frozen && p.quantity !== 0)
+    .map((p) => ({ id: p.id, name: p.name, frozen: p.frozen, days: daysBetween(p.frozen, today), leftover: isLeftover(p) }))
+    .sort((a, b) => b.days - a.days);
+
+  const byId = new Map(indexRecipes.map((r) => [r.id, r]));
   return {
     portions,
     mealsLeft: plan.length,
     capped: plan.length >= cap,
     plan,
-    balance: weekBalance(plan.map((p) => recipes.find((r) => r.id === p.id))),
+    balance: weekBalance(plan.map((p) => byId.get(p.leftover ? p.recipeId : p.id)).filter(Boolean)),
     expiringSoon,
     unmatched,
+    leftovers,
+    freezer,
+    freezerOld: freezer.filter((f) => f.days >= FREEZER_NUDGE_DAYS),
   };
 }
 
 // The week's dinners with a shop in mind. Days the plan leaves empty get the meal that needs
 // least buying (favourites and meals cooked often first, no repeats). Everything missing or
 // running short across the week is added up, allowing for food the earlier days use.
-function shopForWeek(pantry, recipes, portions, { week = [], today = new Date().toISOString().slice(0, 10), favourites = [], often = [], indexRecipes = recipes } = {}) {
+function shopForWeek(pantry, recipes, portions, { week = [], today = new Date().toISOString().slice(0, 10), favourites = [], often = [], indexRecipes = recipes, ratings = {} } = {}) {
   const index = buildIndex(indexRecipes);
   const stock = makeStock(pantry, index);
   const byId = new Map(indexRecipes.map((r) => [r.id, r]));
@@ -239,14 +290,20 @@ function shopForWeek(pantry, recipes, portions, { week = [], today = new Date().
   const used = new Set(week.filter(Boolean));
   const need = new Map();
   const days = [];
+  const leftovers = new Map(pantry.filter(isLeftover).map((p) => [`leftover:${p.id}`, p]));
   for (let d = 0; d < 7; d++) {
+    // A night of leftovers needs nothing buying.
+    if (week[d] && leftovers.has(week[d])) {
+      days.push({ id: week[d], name: leftoverName(leftovers.get(week[d])), planned: true, leftover: true, buy: [] });
+      continue;
+    }
     let recipe = week[d] ? byId.get(week[d]) : null;
     if (!recipe) {
       let best = null;
       for (const r of mains) {
         if (used.has(r.id)) continue;
         const e = evaluate(r, portions, stock, today);
-        const cost = e.missing.length + e.short.length / 2 - (fav.has(r.id) ? 1.5 : 0) - (oft.has(r.id) ? 1 : 0);
+        const cost = e.missing.length + e.short.length / 2 - (oft.has(r.id) ? 1 : 0) - 0.75 * preference(r.id, fav, ratings);
         if (!best || cost < best.cost) best = { r, cost };
       }
       if (!best) {
@@ -307,4 +364,4 @@ function cook(pantry, recipe, portions, recipes) {
   return { ok: true, pantry: updated };
 }
 
-module.exports = { suggestMeals, estimateMeals, shopForWeek, cook, conceptsFor, buildIndex, needFor, UNITS };
+module.exports = { suggestMeals, estimateMeals, shopForWeek, cook, conceptsFor, buildIndex, needFor, leftoverMeals, preference, UNITS, FREEZER_NUDGE_DAYS };

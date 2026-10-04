@@ -204,7 +204,7 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; 
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
 .day { background: var(--surface-2); border-radius: 14px; padding: 12px; min-height: 104px; display: flex; flex-direction: column; gap: 6px; }
 .day .dname { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-.day .meal { font-weight: 700; font-size: 14px; line-height: 1.3; }
+.day .meal { font-weight: 700; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; hyphens: auto; }
 .day.today { background: var(--accent-soft); }
 .day.today .dname { color: var(--accent); }
 .day.gap { background: none; border: 1.5px dashed var(--line); }
@@ -251,8 +251,23 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; 
 .meal-card details summary::-webkit-details-marker { display: none; }
 .meal-card ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
 .meal-card .actions { display: flex; gap: 8px; margin-top: auto; flex-wrap: wrap; }
-.ing-row { display: grid; grid-template-columns: 1fr 90px 90px auto auto; gap: 8px; align-items: center; }
-@media (max-width: 520px) { .ing-row { grid-template-columns: 1fr 70px 80px; } .ing-row .opt { grid-column: 1 / 3; } }
+/* Ingredient rows: the name gets a line of its own, so it stays readable in a narrow card. */
+.ing-row { display: grid; grid-template-columns: 80px 90px 1fr auto; gap: 8px; align-items: center; padding-bottom: 8px; border-bottom: 1px dashed var(--line); }
+.ing-row [name=ing-name] { grid-column: 1 / -1; }
+/* Rating a dinner: big face buttons, one row per person. */
+.rate-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+.rate-row .who { font-weight: 600; }
+.rate-btns { display: flex; gap: 8px; }
+.rate-btns label { position: relative; cursor: pointer; }
+.rate-btns input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.rate-btns span { display: grid; place-items: center; width: 52px; height: 52px; font-size: 28px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--surface-2); transition: transform .1s; }
+.rate-btns input:checked + span { border-color: var(--accent); background: var(--accent-soft); transform: scale(1.08); }
+.rate-btns input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Lunchboxes: one column per school day. */
+.lunch-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.lunch-day { background: var(--surface-2); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; line-height: 1.3; }
+.lunch-day .dname { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+@media (max-width: 860px) { .lunch-grid { grid-template-columns: 1fr; } }
 
 /* ---------- misc ---------- */
 .banner { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border-radius: 14px; background: var(--warn-soft); color: var(--warn); font-weight: 600; }

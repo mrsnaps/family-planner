@@ -17,6 +17,7 @@ const ai = require('./modules/ai');
 const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
 const demo = require('./modules/demo');
+const { nodeFetchPage } = require('./modules/food/fetch-page');
 
 const PUBLIC = path.join(__dirname, 'public');
 const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(/\s+/).filter(Boolean);
@@ -31,10 +32,16 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-function createApp(store) {
+// options.fetchPage: how "Recipe from a link" opens a page (async (url) => html). By default
+// the Node server fetches it itself; the browser build has none (see modules/food/fetch-page.js).
+function createApp(store, options = {}) {
   const router = new Router();
   const fam = family.register(router, store);
-  const foodApi = food.register(router, store, fam.summary);
+  let choresApi = null;
+  const foodApi = food.register(router, store, fam.summary, {
+    fetchPage: options.fetchPage !== undefined ? options.fetchPage : nodeFetchPage(),
+    people: () => (choresApi ? choresApi.people() : []),
+  });
   const clothesApi = clothes.register(router, store, fam.family);
   const shoppingApi = shopping.register(router, store, {
     meals: foodApi.meals,
@@ -47,7 +54,7 @@ function createApp(store) {
     addClothesItem: clothesApi.addItem,
   });
 
-  const choresApi = chores.register(router, store, fam.summary);
+  choresApi = chores.register(router, store, fam.summary);
   const calendarApi = calendar.register(router, store, fam.summary);
   const packingApi = packing.register(router, store, {
     family: fam.summary,
@@ -106,7 +113,7 @@ function createApp(store) {
       if (data[k] !== undefined && (typeof data[k] !== 'object' || Array.isArray(data[k]))) throw new HttpError(400, `Backup section ${k} is damaged`);
     }
     // Lists the app reads straight away must be lists, or the pages would break after restoring.
-    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'], calendar: ['events'], packing: ['trips'] };
+    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites', 'ratings'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'], calendar: ['events'], packing: ['trips'] };
     for (const [k, keys] of Object.entries(LISTS)) {
       for (const key of keys) {
         const v = data[k] && data[k][key];

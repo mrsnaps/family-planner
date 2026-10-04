@@ -6,8 +6,11 @@
 // come back in the same shape the pages already show. If the AI fails, pages keep the rules.
 const { TYPES } = require('../clothes/engine');
 const { canDo } = require('../chores/engine');
+const { dislikes: dislikesFood, suits: suitsLunchbox } = require('../food/lunchbox');
+const { notKeenText } = require('../food/ratings');
 
 const str = { type: 'string' };
+const lunchSlot = { type: 'object', properties: { name: str, itemIds: { type: 'array', items: str } }, required: ['name', 'itemIds'], additionalProperties: false };
 const SCHEMAS = {
   'suggest-shopping': {
     type: 'object',
@@ -80,6 +83,23 @@ const SCHEMAS = {
     required: ['items'],
     additionalProperties: false,
   },
+  'suggest-lunchbox': {
+    type: 'object',
+    properties: {
+      boxes: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { childId: str, day: { type: 'integer' }, main: lunchSlot, snack: lunchSlot, fruit: lunchSlot, drink: lunchSlot },
+          required: ['childId', 'day', 'main', 'snack', 'fruit', 'drink'],
+          additionalProperties: false,
+        },
+      },
+      toBuy: { type: 'array', items: str },
+    },
+    required: ['boxes', 'toBuy'],
+    additionalProperties: false,
+  },
   'suggest-outfits': {
     type: 'object',
     properties: {
@@ -104,8 +124,17 @@ const SYSTEM = {
   'suggest-meals':
     'You plan dinners for a UK family using only the recipes they already have, chosen by id from the list given. ' +
     'Prefer meals they can cook with what is in, use food that goes off soon first, keep variety (avoid what they had in the last few days), ' +
-    'favour their favourites, and follow dietary needs strictly. "picks": up to 5 recipes to cook next, best first, each with one short reason. ' +
-    '"week": a dinner for each day from 0 (today) to 6, skipping days where nothing they have would work.',
+    'favour their favourites and the meals the family rated well, avoid meals someone isn\'t keen on, and follow dietary needs strictly. ' +
+    '"picks": up to 5 recipes to cook next, best first, each with one short reason. ' +
+    '"week": a dinner for each day from 0 (today) to 6, skipping days where nothing they have would work. ' +
+    'Leftovers are already cooked: put them on the first days (one night per meal\'s worth), by their "leftover:" id.',
+  'suggest-lunchbox':
+    'You plan school lunchboxes for a UK family\'s children, Monday to Friday (days 0 to 4), from the food they already have, ' +
+    'choosing by item id from the list given. Each lunchbox has a main (such as a sandwich, wrap or pasta salad), a snack, ' +
+    'a piece of fruit or some veg, and a drink (water is always fine: name "Water" with no item ids). ' +
+    'Vary things through the week, use food that goes off soonest first, don\'t plan more of anything than they have, ' +
+    'follow dietary needs strictly and never include anything a child won\'t eat. Keep names short, like "Ham sandwich" or "Apple". ' +
+    '"toBuy": up to 8 things worth buying to fill any gaps, as short everyday names.',
   'suggest-chores':
     'You share out a UK family\'s household chores for the coming week, fairly and sensibly. ' +
     'Each chore listed is due on the days given: say who does each one, by person id, for each day. ' +
@@ -224,30 +253,90 @@ function createSuggesters({ familySummary, food, clothes, shopping, chores, pack
       const meals = food.mealsFor(food.familyRecipes().map((r) => r.id));
       const h = habitsText(food.history(), byId, now);
       const favs = new Set(food.favourites());
+      const rated = (m) => {
+        const r = m.rating;
+        if (!r) return '';
+        const bits = [r.likedBy.length ? `liked by ${r.likedBy.join(', ')}` : '', notKeenText(r.notKeen), `rated ${r.up} up, ${r.meh} meh, ${r.down} down`].filter(Boolean);
+        return ` | ${bits.join('; ')}`;
+      };
       const list = meals.slice(0, 80).map((m) =>
-        `- ${m.id} | ${m.name}${favs.has(m.id) ? ' (favourite)' : ''} | ${m.status === 'ready' ? 'can cook now' : `needs ${[...m.missing, ...m.short.map((s) => s.name)].join(', ')}`}${m.usesExpiring ? ' | uses food going off soon' : ''}`);
+        `- ${m.id} | ${m.name}${favs.has(m.id) ? ' (favourite)' : ''} | ${m.status === 'ready' ? 'can cook now' : `needs ${[...m.missing, ...m.short.map((s) => s.name)].join(', ')}`}${m.usesExpiring ? ' | uses food going off soon' : ''}${rated(m)}`);
+      const stats = food.stats();
+      const leftovers = stats.leftovers.map((l) => `- leftover:${l.id} | ${l.name} | ${l.portions ?? '?'} portions | ${l.frozen ? `in the freezer since ${l.frozen}` : `eat by ${l.expiry}`}`);
       return [
-        `Today is ${today()}.`, familyLine(familySummary()),
-        `In the kitchen now:\n${food.pantry().filter((p) => p.quantity !== 0).map(line).join('\n') || '- (nothing listed)'}`,
+        `Today is ${today()}.`, familyLine(familySummary()) + ` About ${stats.portions} portions a meal.`,
+        `In the kitchen now:\n${food.pantry().filter((p) => p.quantity !== 0 && !p.leftover).map(line).join('\n') || '- (nothing listed)'}`,
+        `Leftovers to eat first (id | meal | portions | when):\n${leftovers.join('\n') || '- (none)'}`,
         `Cooked in the last 2 months:\n${h.cooked}`,
-        `Their recipes (id | name | status):\n${list.join('\n') || '- (none)'}`,
+        `Their recipes (id | name | status | what the family thought):\n${list.join('\n') || '- (none)'}`,
         'Pick what they should cook next, and plan dinners for the week.',
       ].join('\n\n');
     },
     normalize(r) {
       const ok = new Map(food.familyRecipes().map((x) => [x.id, x]));
+      for (const l of food.stats().leftovers) ok.set(`leftover:${l.id}`, { id: `leftover:${l.id}`, name: l.name, leftover: true });
       const seen = new Set();
       const picks = [];
       for (const p of Array.isArray(r.picks) ? r.picks : []) {
-        if (!ok.has(p.recipeId) || seen.has(p.recipeId)) continue;
+        if (!ok.has(p.recipeId) || ok.get(p.recipeId).leftover || seen.has(p.recipeId)) continue;
         seen.add(p.recipeId);
         picks.push({ id: p.recipeId, name: ok.get(p.recipeId).name, why: String(p.why || '').trim() });
       }
       const week = Array(7).fill(null);
       for (const d of Array.isArray(r.week) ? r.week : []) {
-        if (Number.isInteger(d.day) && d.day >= 0 && d.day < 7 && ok.has(d.recipeId) && !week[d.day]) week[d.day] = { id: d.recipeId, name: ok.get(d.recipeId).name };
+        if (Number.isInteger(d.day) && d.day >= 0 && d.day < 7 && ok.has(d.recipeId) && !week[d.day]) {
+          week[d.day] = { id: d.recipeId, name: ok.get(d.recipeId).name, ...(ok.get(d.recipeId).leftover ? { leftover: true } : {}) };
+        }
       }
       return { picks: picks.slice(0, 5), week };
+    },
+  };
+
+  // Lunchboxes: the AI chooses from the same food the rules can use; anything it names that
+  // isn't in the kitchen, doesn't suit the diet or a child won't eat is dropped.
+  const lunchboxArea = food.lunchbox && {
+    task: 'suggest-lunchbox',
+    prompt() {
+      const plan = food.lunchbox();
+      const avoid = food.lunchDislikes();
+      const kids = familySummary().children.filter((c) => plan.children.some((p) => p.childId === c.id))
+        .map((c) => `- ${c.id} | ${c.name} | age ${c.age != null ? Math.floor(c.age) : '?'} | won't eat: ${(avoid[c.id] || []).join(', ') || 'nothing listed'}`);
+      const items = food.lunchboxFood().filter((f) => suitsLunchbox(f.name, familySummary().dietary)).map((f) => `- ${f.id} | ${f.name} | ${f.kind} | enough for about ${f.left} lunchbox${f.left === 1 ? '' : 'es'}${f.expiry ? ` | use by ${f.expiry}` : ''}`);
+      const slot = (s) => (s ? s.name : '(gap)');
+      const rules = plan.children.flatMap((c) => c.days.map((d, i) => `- ${c.name}, day ${i}: ${slot(d.main)}; ${slot(d.snack)}; ${slot(d.fruit)}; ${slot(d.drink)}`));
+      return [
+        `Today is ${today()}.`, familyLine(familySummary()),
+        `School days: ${plan.days.map((d, i) => `day ${i} = ${d.day} ${d.date}`).join(', ')}.`,
+        `Children with a lunchbox (id | name | age | won't eat):\n${kids.join('\n') || '- (none)'}`,
+        `Lunchbox food in the kitchen (id | name | kind | amount | use by):\n${items.join('\n') || '- (nothing suitable)'}`,
+        `The app's own plan:\n${rules.join('\n') || '- (none)'}`,
+        'Plan the lunchboxes for the week.',
+      ].join('\n\n');
+    },
+    normalize(r) {
+      const plan = food.lunchbox();
+      const dietary = familySummary().dietary;
+      const avoid = food.lunchDislikes();
+      const items = new Map(food.lunchboxFood().filter((f) => suitsLunchbox(f.name, dietary)).map((f) => [f.id, f]));
+      const kids = new Map(plan.children.map((c) => [c.childId, { childId: c.childId, name: c.name, days: plan.days.map((d) => ({ date: d.date, day: d.day, main: null, snack: null, fruit: null, drink: null })) }]));
+      const clean = (s, childId, kind) => {
+        if (!s || typeof s !== 'object') return null;
+        const name = String(s.name || '').trim().slice(0, 60);
+        const ids = [...new Set(Array.isArray(s.itemIds) ? s.itemIds : [])];
+        if (!ids.length) return kind === 'drink' && /water/i.test(name) ? { name: 'Water', uses: [] } : null;
+        const used = ids.map((id) => items.get(id));
+        if (used.some((f) => !f || dislikesFood(f.name, avoid[childId]))) return null;
+        return { name: name || used.map((f) => f.name).join(' and '), uses: used.map((f) => f.name) };
+      };
+      for (const b of Array.isArray(r.boxes) ? r.boxes : []) {
+        const kid = kids.get(b && b.childId);
+        if (!kid || !Number.isInteger(b.day) || b.day < 0 || b.day >= kid.days.length) continue;
+        const box = kid.days[b.day];
+        for (const kind of ['main', 'snack', 'fruit', 'drink']) if (!box[kind]) box[kind] = clean(b[kind], kid.childId, kind);
+      }
+      const have = new Set(food.pantry().filter((p) => p.quantity !== 0).map((p) => p.name.toLowerCase()));
+      const toBuy = [...new Set((Array.isArray(r.toBuy) ? r.toBuy : []).map((x) => String(x || '').trim().slice(0, 40)).filter((x) => x && !have.has(x.toLowerCase())))].slice(0, 8);
+      return { days: plan.days, children: [...kids.values()], toBuy };
     },
   };
 
@@ -377,7 +466,7 @@ function createSuggesters({ familySummary, food, clothes, shopping, chores, pack
     },
   };
 
-  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}), ...(packingArea ? { packing: packingArea } : {}) };
+  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}), ...(packingArea ? { packing: packingArea } : {}), ...(lunchboxArea ? { lunchbox: lunchboxArea } : {}) };
 }
 
 module.exports = { createSuggesters, SCHEMAS, SYSTEM };

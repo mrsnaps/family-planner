@@ -46,6 +46,22 @@ test('the demo shows a lived-in family, then puts the real one back exactly', as
   const month = (await call('GET', '/money')).body;
   assert.ok(month.budget && month.categories.filter((c) => c.total).length >= 2, 'spending by category with a budget');
 
+  // Leftovers in the fridge (eaten first), food in the freezer, ratings and lunchboxes.
+  const food = (await call('GET', '/food/stats')).body;
+  assert.ok(food.leftovers.some((l) => !l.frozen && l.days === 1), 'leftovers from last night');
+  assert.ok(food.plan[0].leftover, 'the week starts with the leftovers');
+  assert.ok(food.freezer.length >= 3 && food.freezerOld.length >= 1, 'a freezer with something to use up');
+  assert.ok(dash.reminders.some((r) => r.id.startsWith('food-leftover-')));
+  assert.ok(dash.reminders.some((r) => r.id.startsWith('food-freezer-')));
+  const ratings = (await call('GET', '/food/ratings')).body.recipes;
+  assert.ok(Object.keys(ratings).length >= 3);
+  assert.deepStrictEqual(ratings['mac-cheese'].notKeen, ['Leo']);
+  const lunch = (await call('GET', '/food/lunchbox')).body;
+  assert.deepStrictEqual(lunch.children.map((c) => c.name), ['Mia', 'Leo']);
+  assert.deepStrictEqual(lunch.notAtSchool, ['Ruby']);
+  assert.ok(lunch.children.every((c) => c.days.every((d) => d.main && d.fruit)), 'every school day has a lunchbox');
+  assert.deepStrictEqual(lunch.children[1].wontEat, ['tuna', 'crisps']);
+
   // Backups during the demo are still the family's own, and restoring waits.
   assert.deepStrictEqual((await call('GET', '/export')).body.data, before);
   assert.strictEqual((await call('POST', '/import', { app: 'family-planner', version: 1, data: before })).status, 409);
