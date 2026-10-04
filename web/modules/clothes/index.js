@@ -83,6 +83,15 @@ function register(router, store, family) {
     return it;
   });
 
+  // Pass every outgrown thing that fits a sibling to them in one go (optionally from one child).
+  router.post('/api/v1/clothes/hand-down-all', (req, body) => {
+    const list = handMeDowns(family().children, data().items)
+      .filter((h) => (!body.toChildId || h.toChildId === body.toChildId) && (!body.fromChildId || h.fromChildId === body.fromChildId));
+    for (const h of list) data().items.find((x) => x.id === h.itemId).childId = h.toChildId;
+    store.save();
+    return { moved: list.length };
+  });
+
   router.put('/api/v1/clothes/items/:id', (req, body, { id }) => {
     const items = data().items;
     const i = items.findIndex((x) => x.id === id);
@@ -160,7 +169,13 @@ function register(router, store, family) {
     return p;
   });
 
-  const stats = () => family().children.map((c) => childStats(c, data().items, data().targets, new Date(), { prices: data().prices || DEFAULT_PRICES }));
+  const stats = () => {
+    const passing = handMeDowns(family().children, data().items);
+    return family().children.map((c) => childStats(c, data().items, data().targets, new Date(), {
+      prices: data().prices || DEFAULT_PRICES,
+      waiting: passing.filter((h) => h.toChildId === c.id),
+    }));
+  };
   router.get('/api/v1/clothes/stats', () => stats());
 
   return { stats, addItem, items: () => data().items, handMeDowns: () => handMeDowns(family().children, data().items) };

@@ -23,10 +23,16 @@ const fmtDate = (d) => new Date(d).toLocaleDateString(undefined, { day: 'numeric
 const fmtShort = (d) => new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
 
+// Who is using the app, when signed in, so the shared list can show who added what.
+const member = () => {
+  const email = window.FamilyPlannerAccount?.status().email;
+  return email ? { 'X-Family-Member': email } : {};
+};
+
 async function api(path, opts = {}) {
   const res = await fetch(API + path, {
     method: opts.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...member() },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json();
@@ -221,6 +227,15 @@ function money(n) {
   return '£' + (Math.round(n * 100) / 100).toLocaleString('en-GB', { maximumFractionDigits: 0 });
 }
 
+// "Pass all 4 to Ava": one button per sibling with two or more things waiting.
+function passAllButtons(list) {
+  const by = new Map();
+  for (const h of list) by.set(h.toChildId, { name: h.toName, n: (by.get(h.toChildId)?.n || 0) + 1, from: new Set([...(by.get(h.toChildId)?.from || []), h.fromChildId]) });
+  const from = new Set(list.map((h) => h.fromChildId));
+  return [...by].filter(([, v]) => v.n >= 2).map(([id, v]) =>
+    `<button class="btn sm primary" data-pass-all="${id}" ${from.size === 1 ? `data-from="${[...from][0]}"` : ''}>Pass all ${v.n} to ${esc(v.name)}</button>`).join(' ');
+}
+
 function kidCard(s, i, { compact = false } = {}) {
   const child = state.family.children.find((c) => c.id === s.childId) || { name: s.name };
   const rows = Object.entries(state.targets).map(([t, want]) => {
@@ -244,6 +259,7 @@ function kidCard(s, i, { compact = false } = {}) {
         ${statusPill(s)}
       </div>
       <p class="small" style="margin-top:12px">${esc(s.advice)}</p>
+      ${s.handMeDowns ? `<p class="hint" style="margin-top:6px">♻️ Counting ${plural(s.handMeDowns.count, 'hand-me-down')} from ${esc(s.handMeDowns.from.join(' and '))}, so you don't buy what you already have.</p>` : ''}
       ${s.laundry && s.laundry.inWash ? `<div class="chips" style="margin-top:8px"><span class="pill ${s.laundry.warning ? 'warn' : 'plain'}">🧺 ${s.laundry.inWash} in the wash · ${plural(s.laundry.cleanDays, 'clean day')} left</span></div>` : ''}
       ${compact ? '' : `<div class="bars">${rows}</div>`}
       <div class="forecasts">
@@ -276,6 +292,7 @@ function reminderList(list, limit = 6) {
 }
 
 function weekStrip(plan) {
+  state.week = Array.from({ length: 7 }, (_, d) => plan[d]?.id || null);
   const days = [];
   const start = new Date();
   for (let d = 0; d < 7; d++) {
@@ -344,12 +361,13 @@ async function renderHome() {
     <div class="card" style="margin-top:16px">
       <div class="card-head"><h2>This week's dinners</h2><span class="muted small" id="week-by">Planned from what's in, using food that goes off first</span></div>
       <div id="week-strip">${weekStrip(d.food.plan)}</div>
+      <p style="margin-top:12px"><button class="btn" data-week-shop>${icon('cart')} Shop for the week</button> <span class="hint">Fills the gaps and adds what all 7 dinners need</span></p>
       ${balanceChips(d.food.balance)}
       ${d.food.expiringSoon.length ? `<div class="chips" style="margin-top:14px">${d.food.expiringSoon.map((e) =>
         `<span class="pill ${e.days < 0 ? 'bad' : 'warn'}">${foodCat(e.name).emoji} ${esc(e.name)} · ${e.days < 0 ? 'out of date' : e.days === 0 ? 'today' : 'in ' + plural(e.days, 'day')}</span>`).join('')}</div>` : ''}
     </div>
 
-    ${d.handMeDowns.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>♻️ Hand-me-downs</h2><span class="muted small">Outgrown clothes a sibling can use</span></div>
+    ${d.handMeDowns.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>♻️ Hand-me-downs</h2>${passAllButtons(d.handMeDowns) || '<span class="muted small">Outgrown clothes a sibling can use</span>'}</div>
       <ul class="list">${d.handMeDowns.slice(0, 5).map((h) => `<li class="row"><span class="emoji">${GARMENT[h.type] || '👕'}</span>
         <div class="grow"><div class="title">${esc(h.name)} <span class="pill plain">${esc(h.size)}</span></div><div class="sub">${esc(h.fromName)} → ${esc(h.toName)} · ${h.fitsNow ? 'fits now' : 'to grow into'}</div></div>
         <button class="btn sm" data-handdown="${h.itemId}" data-to="${h.toChildId}">Pass to ${esc(h.toName)}</button></li>`).join('')}</ul></div>` : ''}
@@ -702,7 +720,7 @@ async function renderClothes() {
     </div>
 
     ${passOn.length || sellable.length ? `<div class="card" style="margin-top:16px">
-      <div class="card-head"><h2>♻️ Outgrown</h2><span class="muted small">Pass them on, sell or give away</span></div>
+      <div class="card-head"><h2>♻️ Outgrown</h2>${passAllButtons(passOn) || '<span class="muted small">Pass them on, sell or give away</span>'}</div>
       <ul class="list">
         ${passOn.map((h) => `<li class="row"><span class="emoji">${GARMENT[h.type] || '👕'}</span>
           <div class="grow"><div class="title">${esc(h.name)} <span class="pill plain">${esc(h.size)}</span></div><div class="sub">${esc(h.toName)} can ${h.fitsNow ? 'wear it now' : 'grow into it'}</div></div>
@@ -775,13 +793,16 @@ function listingText(it) {
 
 // ---------- shopping ----------
 async function renderShopping() {
-  const data = await api('/shopping');
+  const [data, spend] = await Promise.all([api('/shopping'), api('/spending')]);
   const children = state.family.children;
   state.shoppingCount = data.items.filter((i) => !i.done).length;
   $('#page-sub').textContent = `${plural(state.shoppingCount, 'thing')} to buy · tick "Bought" and it goes straight into the cupboard or wardrobe`;
   $('#page-actions').innerHTML = (data.items.some((i) => !i.done) ? `<button class="btn" data-copy-list>${icon('copy')} Copy</button>${navigator.share ? `<button class="btn" data-share-list>${icon('share')} Share</button>` : ''}` : '') +
     (data.items.some((i) => i.done) ? `<button class="btn primary" data-bought-ticked>${icon('bag')} Bought all ticked</button><button class="btn" data-clear-done>${icon('trash')} Clear ticked</button>` : '');
   state.usuals = data.usuals || [];
+  state.people = data.people || {};
+  const me = ACCOUNT?.status().email;
+  const byOther = (it) => it.addedBy && it.addedBy !== me;
   const childName = (id) => children.find((c) => c.id === id)?.name;
   const groups = { food: [], clothes: [], other: [] };
   for (const it of data.items) groups[it.kind || 'other'].push(it);
@@ -791,7 +812,7 @@ async function renderShopping() {
     <li class="row ${it.done ? 'done' : ''}">
       <button class="check ${it.done ? 'on' : ''}" data-toggle="${it.id}" data-state="${it.done}" aria-label="Tick ${esc(it.name)}">${icon('check')}</button>
       <div class="grow"><div class="title">${it.quantity ? it.quantity + ' × ' : ''}${esc(cap(it.name))}${it.size ? ` <span class="pill plain">${esc(it.size)}</span>` : ''}</div>
-        ${it.childId || it.note ? `<div class="sub">${it.childId ? 'For ' + esc(childName(it.childId) || 'child') : ''}${it.note ? (it.childId ? ' · ' : '') + esc(it.note) : ''}</div>` : ''}
+        ${it.childId || it.note || byOther(it) ? `<div class="sub">${[it.childId && 'For ' + esc(childName(it.childId) || 'child'), it.note && esc(it.note), byOther(it) && `Added by ${esc(personName(it.addedBy, data.people))}`].filter(Boolean).join(' · ')}</div>` : ''}
         ${it.kind === 'food' && !it.done ? `<div class="sub shops">${SHOPS.map(([n, url]) => `<a href="${esc(url(it.name))}" target="_blank" rel="noopener">${esc(n)}</a>`).join(' · ')}</div>` : ''}</div>
       ${it.kind !== 'other' ? `<button class="btn sm" data-bought="${it.id}">${icon('bag')} Bought</button>` : ''}
       <button class="icon-btn danger" data-del-shop="${it.id}" aria-label="Remove ${esc(it.name)}">${icon('x')}</button>
@@ -815,15 +836,60 @@ async function renderShopping() {
         </div>
         ${suggestionsCard(data.suggestions)}
       </div>
-      <div class="card">
+      <div class="card" id="shop-list">
         <div class="card-head"><h2>Your list</h2></div>
         ${data.items.length ? Object.entries(groups).filter(([, v]) => v.length).map(([k, v]) =>
           `<div class="group-title">${label[k]}</div><ul class="list">${v.map(row).join('')}</ul>`).join('')
           : emptyState('🛒', 'Your list is empty. Add things, or use the suggestions.')}
       </div>
-    </div>`;
+    </div>
+    <div style="margin-top:16px">${spendingCard(spend)}</div>`;
   state.suggestions = data.suggestions;
   if ((state.ai = await api('/ai/settings')).suggestions) aiShopping();
+}
+
+// The name someone goes by on the shared list: the one they chose, or their email's first part.
+function personName(email, people = state.people || {}) {
+  if (people[email]) return people[email];
+  const first = String(email).split('@')[0].split(/[._+-]/)[0].replace(/\d+$/, '');
+  return cap(first || email);
+}
+
+function spendingCard(sp) {
+  const vs = sp.lastMonth ? ` <span class="muted small">(last month ${moneyP(sp.lastMonth)})</span>` : '';
+  return `<div class="card" id="spending-card">
+    <div class="card-head"><h2>💷 Food spending</h2></div>
+    ${sp.entries.length ? `<p style="margin-top:4px"><strong style="font-size:1.4rem">${moneyP(sp.thisMonth)}</strong> this month${vs}</p>
+      <p class="hint" style="margin-top:4px">${[sp.perWeek != null && `About ${moneyP(sp.perWeek)} a week`, sp.perDinner != null && `roughly ${moneyP(sp.perDinner)} per dinner cooked (${sp.dinnersCooked} this month)`].filter(Boolean).join(', ') || 'Add a few shops to see a weekly average.'}</p>`
+      : '<p class="hint">Add the total from each receipt to see what food costs you each week and month.</p>'}
+    <form id="spend-form" class="form-row" style="grid-template-columns:1fr 1fr auto;margin-top:12px">
+      <input name="amount" inputmode="decimal" placeholder="£ total" aria-label="Amount" required>
+      <input name="shop" placeholder="Shop" aria-label="Shop (optional)">
+      <button class="btn">${icon('plus')} Add</button>
+    </form>
+    ${sp.entries.length ? `<ul class="list" style="margin-top:8px">${sp.entries.slice(0, 6).map((e) => `<li class="row">
+      <div class="grow"><div class="title">${moneyP(e.amount)}${e.shop ? ` · ${esc(e.shop)}` : ''}</div><div class="sub">${esc(fmtDate(e.date))}${e.addedBy && e.addedBy !== ACCOUNT?.status().email ? ` · ${esc(personName(e.addedBy))}` : ''}</div></div>
+      <button class="icon-btn danger" data-del-spend="${e.id}" aria-label="Remove ${moneyP(e.amount)}">${icon('x')}</button></li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+const moneyP = (n) => '£' + Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Shop for the week: shows what's needed, then adds it all.
+async function weekShop() {
+  const r = await api('/food/week-shop', { method: 'POST', body: { week: state.week || [] } });
+  if (!r.list.length) return toast('Nothing to buy: everything for the week is in.');
+  const day = (d) => d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : new Date(Date.now() + d * 86400000).toLocaleDateString(undefined, { weekday: 'short' });
+  const ok = await ask({
+    title: 'Shop for the week',
+    body: `<ul class="list small">${r.days.map((m, d) => m ? `<li class="row"><div class="grow"><strong>${day(d)}</strong> ${esc(m.name)}${m.buy.length ? ` <span class="muted">· buy ${esc(m.buy.join(', '))}</span>` : ''}</div></li>` : '').join('')}</ul>
+      <p class="muted" style="margin-top:10px">Adds ${plural(r.list.length, 'thing')} to the shopping list (anything already on it is skipped):</p>
+      <p class="small" style="margin-top:6px">${r.list.map((i) => esc(cap(i.name)) + (i.quantity ? ` <span class="muted">${i.quantity}${i.unit && i.unit !== 'pcs' ? ' ' + esc(i.unit) : ''}</span>` : '')).join(', ')}</p>`,
+    ok: `Add ${r.list.length} to the list`,
+  });
+  if (!ok) return;
+  const done = await api('/shopping/items/bulk', { method: 'POST', body: { items: r.list.map(({ name, quantity, unit }) => ({ kind: 'food', name, quantity, unit, note: 'For the week' })) } });
+  toast(`Added ${plural(done.added, 'thing')} for the week${done.skipped ? ` (${done.skipped} already on the list)` : ''}`);
+  refresh();
 }
 
 // One tap for the things you always buy, and the whole of your last shop again.
@@ -1019,6 +1085,16 @@ document.addEventListener('click', guard(async (e) => {
     toast(`Added ${cap(u.name)}`);
     return refresh();
   }
+  if (t.hasAttribute('data-week-shop')) return weekShop();
+  if (d.passAll) {
+    const r = await api('/clothes/hand-down-all', { method: 'POST', body: { toChildId: d.passAll, fromChildId: d.from || null } });
+    toast(`Passed on ${plural(r.moved, 'thing')}`);
+    return refresh();
+  }
+  if (d.delSpend) {
+    await api('/spending/' + d.delSpend, { method: 'DELETE' });
+    return refresh();
+  }
   if (t.hasAttribute('data-repeat-shop')) {
     const r = await api('/shopping/repeat-last-shop', { method: 'POST' });
     toast(`Added ${plural(r.added, 'thing')} from your last shop`);
@@ -1028,7 +1104,16 @@ document.addEventListener('click', guard(async (e) => {
     const r = await api('/shopping/bought-ticked', { method: 'POST' });
     const where = [r.food && `${plural(r.food, 'thing')} in the cupboard`, r.clothes && `${plural(r.clothes, 'item')} in the wardrobe`].filter(Boolean).join(' and ');
     toast(where ? `Put away: ${where}` : 'Cleared the ticked items');
-    return refresh();
+    await refresh();
+    // Back from the shops: a good moment to note what it cost (optional).
+    if (r.food) {
+      const got = await ask({ title: 'How much was the shop?', body: '<p class="muted">Optional. Adds it to your food spending.</p>' + field('amount', 'Total (£)', 'text', '', 'inputmode="decimal" placeholder="e.g. 64.20"') + field('shop', 'Shop (optional)'), ok: 'Add' });
+      if (got && got.amount) {
+        await api('/spending', { method: 'POST', body: got }).then(() => toast('Added to food spending'), (e) => toast(e.message));
+        return refresh();
+      }
+    }
+    return;
   }
   if (t.hasAttribute('data-clear-done')) { await api('/shopping/clear-done', { method: 'POST' }); return refresh(); }
   if (d.aiRefresh) {
@@ -1136,6 +1221,10 @@ document.addEventListener('submit', guard(async (e) => {
     f.elements.type.value = keepType;
     f.elements.type.dispatchEvent(new Event('change', { bubbles: true }));
     f.elements.name.focus();
+  } else if (form.id === 'spend-form') {
+    await api('/spending', { method: 'POST', body });
+    toast('Added to food spending');
+    await refresh();
   } else if (form.id === 'shop-form') {
     await api('/shopping/items', { method: 'POST', body: { ...body, childId: body.childId || null } });
     await refresh();
@@ -1182,6 +1271,7 @@ function householdBlock() {
       <strong>${household.shared ? 'Your household' : 'Just you so far'}</strong>
       <ul class="small" style="margin:6px 0 0 18px">${names}</ul>
       <p class="hint" style="margin-top:6px">${household.shared ? 'Everyone here signs in with their own email and sees the same lists.' : 'Invite your partner or anyone else who helps, so they can sign in with their own email and share the same lists.'}</p>
+      ${household.shared ? `<p class="small" style="margin-top:8px">On the shopping list you show as <strong>${esc(personName(ACCOUNT.status().email))}</strong> <button class="btn ghost sm" data-account="name">Change</button></p>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="btn sm" data-account="invite">${icon('plus')} Invite someone</button>
         <button class="btn sm ghost" data-account="join">Join a household</button>
@@ -1194,6 +1284,7 @@ async function loadHousehold() {
   if (!ACCOUNT?.household || !ACCOUNT.status().signedIn) return;
   try {
     household = await ACCOUNT.household();
+    state.people = (await api('/shopping')).people || {};
   } catch {
     household = null;
     const line = $('#household-line');
@@ -1379,6 +1470,15 @@ async function accountLeave() {
 
 async function accountAction(what) {
   if (what === 'invite') return accountInvite();
+  if (what === 'name') {
+    const got = await ask({ title: 'Your name on the list', body: '<p class="muted">Shown next to things you add, so everyone knows who asked for what.</p>' + field('name', 'Name', 'text', personName(ACCOUNT.status().email), 'autocomplete="given-name"'), ok: 'Save' });
+    if (!got) return;
+    await api('/shopping/people/me', { method: 'PUT', body: { name: got.name } });
+    state.people = (await api('/shopping')).people;
+    const card = $('#account-card');
+    if (card) card.outerHTML = accountCard();
+    return toast('Saved');
+  }
   if (what === 'join') return accountJoin();
   if (what === 'leave') return accountLeave();
   if (what === 'signin') return accountSignIn();
@@ -1415,7 +1515,14 @@ if (ACCOUNT) {
   // Another device saved changes: show them.
   window.addEventListener('familyplanner:datachanged', (e) => {
     if ($('#dialog').open) return;
-    toast(e.detail?.reason === 'conflict' ? 'Your other device saved changes first, so this shows its latest data.' : 'Updated with changes from your other device');
+    const reason = e.detail?.reason;
+    // Live updates while the app is open are quiet, and wait while someone is typing.
+    if (reason === 'live' || reason === 'merged') {
+      if (document.activeElement?.closest?.('#page form')) return;
+      if (reason === 'merged') toast('Combined your changes with ones saved at the same time on another device');
+      return refresh();
+    }
+    toast(reason === 'conflict' ? 'Your other device saved changes first, so this shows its latest data.' : 'Updated with changes from your other device');
     refresh();
   });
 }

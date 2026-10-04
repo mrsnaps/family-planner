@@ -118,7 +118,9 @@ function outfitsFor(child, items, { season = 'any', limit = 50, uniform = 'exclu
   return { childId: child.id, total: outfits.length, outfits: outfits.slice(0, limit) };
 }
 
-function childStats(child, items, targets = DEFAULT_TARGETS, now = new Date(), { prices = DEFAULT_PRICES } = {}) {
+// `waiting` is the hand-me-downs meant for this child (see handMeDowns): they count towards
+// what the child has, so the app doesn't suggest buying what a sibling has outgrown.
+function childStats(child, items, targets = DEFAULT_TARGETS, now = new Date(), { prices = DEFAULT_PRICES, waiting = [] } = {}) {
   const mine = items.filter((it) => it.childId === child.id);
   const count = (pred) => {
     const out = {};
@@ -135,9 +137,18 @@ function childStats(child, items, targets = DEFAULT_TARGETS, now = new Date(), {
   ).length;
   const wornOut = mine.filter((it) => it.wornOut).length;
 
+  const tally = (list) => {
+    const out = {};
+    for (const t of TYPES) out[t] = 0;
+    for (const it of list) out[it.type] = (out[it.type] || 0) + 1;
+    return out;
+  };
+  const passedNow = tally(waiting.filter((h) => h.fitsNow));
   // Dresses and onesies cover both a top and a bottom for the day.
-  const covers = (t) =>
-    t === 'top' || t === 'bottom' ? fitting[t] + fitting.dress + fitting.onesie : fitting[t];
+  const covers = (t) => {
+    const n = (k) => fitting[k] + passedNow[k];
+    return t === 'top' || t === 'bottom' ? n(t) + n('dress') + n('onesie') : n(t);
+  };
 
   const shortfall = {};
   for (const [t, want] of Object.entries(targets)) {
@@ -152,6 +163,8 @@ function childStats(child, items, targets = DEFAULT_TARGETS, now = new Date(), {
     const owned = count(
       (it) => !it.wornOut && it.type !== 'shoes' && parseSize(it.size)?.label === next.label
     );
+    const passedNext = tally(waiting.filter((h) => parseSize(h.size)?.label === next.label));
+    for (const t of TYPES) owned[t] += passedNext[t];
     const coversNext = (t) =>
       t === 'top' || t === 'bottom' ? owned[t] + owned.dress + owned.onesie : owned[t];
     nextSizeNeeds = {};
@@ -242,6 +255,7 @@ function childStats(child, items, targets = DEFAULT_TARGETS, now = new Date(), {
     forecast,
     shoeForecast,
     nextSizeNeeds,
+    handMeDowns: waiting.length ? { count: waiting.length, fitNow: waiting.filter((h) => h.fitsNow).length, from: [...new Set(waiting.map((h) => h.fromName))] } : null,
     laundry,
     uniform,
     budget,

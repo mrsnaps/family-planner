@@ -2,7 +2,7 @@
 const { newId } = require('../../lib/store');
 const { HttpError } = require('../../lib/http');
 const BUILTIN = require('./recipes');
-const { suggestMeals, estimateMeals, cook, UNITS } = require('./engine');
+const { suggestMeals, estimateMeals, shopForWeek, cook, UNITS } = require('./engine');
 const { suitsDiet, DIETS } = require('./diet');
 const { lookupBarcode } = require('./barcode');
 
@@ -180,6 +180,17 @@ function register(router, store, familySummary) {
     remember('cooked', { recipeId: recipe.id, name: recipe.name, at: new Date().toISOString() });
     store.save();
     return { ok: true, pantry: result.pantry };
+  });
+
+  // Shop for the week: fill the plan's empty days and list what to buy for all of it.
+  // `week` is the plan on screen (the rules' or the AI's): recipe ids, or null for a gap.
+  router.post('/api/v1/food/week-shop', (req, body) => {
+    const week = Array.isArray(body && body.week) ? body.week.slice(0, 7).map((x) => (typeof x === 'string' ? x : null)) : [];
+    const since = Date.now() - 60 * 86400000;
+    const counts = new Map();
+    for (const c of history().cooked || []) if (new Date(c.at) >= since) counts.set(c.recipeId, (counts.get(c.recipeId) || 0) + 1);
+    const often = [...counts].filter(([, n]) => n >= 2).map(([id]) => id);
+    return shopForWeek(data().pantry, familyRecipes(), portions(), { week, favourites: favourites(), often, indexRecipes: recipes() });
   });
 
   const stats = () => estimateMeals(data().pantry, familyRecipes(), portions(), engineOpts());

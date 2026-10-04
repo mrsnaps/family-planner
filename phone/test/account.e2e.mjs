@@ -18,9 +18,9 @@ const ok = (m) => console.log('✓ ' + m);
 const EMAIL = 'nathan@example.com';
 const PASSWORD = 'family123';
 
-async function open() {
+async function open({ poll = 600000 } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await ctx.addInitScript(`globalThis.__fpCloudConfig = { region: 'eu-west-2', clientId: 'test', apiUrl: '${cloud.url}', cognitoUrl: '${cloud.url}/' };`);
+  await ctx.addInitScript(`globalThis.__fpCloudConfig = { region: 'eu-west-2', clientId: 'test', apiUrl: '${cloud.url}', cognitoUrl: '${cloud.url}/' }; globalThis.__fpPollMs = ${poll};`);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -96,27 +96,30 @@ try {
   assert.equal((await a.api('/ai/settings')).data.hasKey, true, 'A keeps its own AI key');
   ok('changes on one device show up on the other, and each keeps its own AI key');
 
-  // Both change at once: the first to save wins and the other is told.
+  // Both change at once: the changes are combined, and both devices end up with both.
   await a.api('/food/items', 'POST', { name: 'rice', quantity: 1, unit: 'kg' });
   await b.api('/food/items', 'POST', { name: 'beans', quantity: 2, unit: 'tin' });
   await a.sync();
   await b.sync();
-  assert.deepEqual(await pantry(b), ['pasta', 'rice']);
-  await b.toast(/other device saved changes first/);
-  ok('a clash between devices keeps the first save and tells the other device');
+  assert.deepEqual(await pantry(b), ['beans', 'pasta', 'rice']);
+  await b.toast(/Combined your changes/);
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['beans', 'pasta', 'rice']);
+  await a.sync();
+  assert.deepEqual(await pantry(a), ['beans', 'pasta', 'rice']);
+  ok('two devices saving at once: both changes are kept on both');
 
   // Reopening keeps you signed in; signing out keeps the data on the device.
   await a.load();
   assert.equal((await a.status()).signedIn, true);
-  assert.deepEqual(await pantry(a), ['pasta', 'rice']);
+  assert.deepEqual(await pantry(a), ['beans', 'pasta', 'rice']);
   await a.page.click('[data-nav="settings"]:visible');
   await a.page.click('[data-account="signout"]');
   await a.page.click('#dialog-form button:has-text("Sign out")');
   await a.page.waitForSelector('#account-card :text("Only on this device")');
-  assert.deepEqual(await pantry(a), ['pasta', 'rice']);
+  assert.deepEqual(await pantry(a), ['beans', 'pasta', 'rice']);
   await a.api('/food/items', 'POST', { name: 'eggs', quantity: 6, unit: '' });
   await new Promise((r) => setTimeout(r, 1800));
-  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['pasta', 'rice']);
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['beans', 'pasta', 'rice']);
   ok('stays signed in after reopening; signing out keeps data here and stops saving online');
 
   // A device that already has its own data asks which copy to keep.
@@ -153,7 +156,7 @@ try {
   const code = (await c.page.textContent('#invite-code')).trim();
   assert.match(code, /^\w{4}-\w{4}$/);
   await c.page.click('#dialog-form button:has-text("Done")');
-  const d = await open();
+  const d = await open({ poll: 400 });
   await d.api('/food/items', 'POST', { name: 'crisps', quantity: 1, unit: 'bag' });
   await d.page.click('[data-nav="settings"]:visible');
   await d.page.click('[data-account="signup"]');
@@ -167,7 +170,7 @@ try {
   await d.page.waitForSelector('#dialog-form :text("isn\'t right or has expired")');
   await d.fill({ code: code.toLowerCase() }, 'Join');
   await d.toast(new RegExp(`joined ${EMAIL}'s household`));
-  assert.deepEqual(await pantry(d), ['pasta', 'rice']);
+  assert.deepEqual(await pantry(d), ['beans', 'pasta', 'rice']);
   await d.page.waitForSelector('#account-card :text("Your household")');
   assert.match(await d.page.textContent('#account-card'), new RegExp(`${EMAIL}[\\s\\S]*partner@example.com \\(you\\)`));
   ok('a second person signs up with their own email and joins with an invite code');
@@ -175,17 +178,38 @@ try {
   // Their changes land in the shared household; leaving takes a copy back to their own.
   await d.api('/food/items', 'POST', { name: 'milk', quantity: 2, unit: 'l' });
   await d.page.waitForFunction(() => !window.FamilyPlannerAccount.status().pending, null, { timeout: 5000 });
-  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['milk', 'pasta', 'rice']);
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['beans', 'milk', 'pasta', 'rice']);
   await c.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await c.toast(/changes from your other device/);
-  assert.deepEqual(await pantry(c), ['milk', 'pasta', 'rice']);
+  assert.deepEqual(await pantry(c), ['beans', 'milk', 'pasta', 'rice']);
+  ok("each person's changes reach the rest of the household");
+
+  // Shopping together: the list updates live on the other phone, showing who added what.
+  await d.page.click('[data-nav="settings"]:visible');
+  await d.page.click('[data-account="name"]');
+  await d.fill({ name: 'Jo' }, 'Save');
+  await d.page.waitForSelector('#account-card :text("show as Jo")');
+  await d.page.click('[data-nav="shopping"]:visible');
+  await c.page.click('[data-nav="shopping"]:visible');
+  await c.page.fill('#shop-form input[name=name]', 'Bananas');
+  await c.page.click('#shop-form button.primary');
+  await d.page.waitForSelector('#shop-list :text("Bananas")', { timeout: 5000 });
+  assert.match(await d.page.textContent('#shop-list'), new RegExp(`Bananas[\\s\\S]*Added by Nathan`));
+  await d.page.fill('#shop-form input[name=name]', 'Nappies');
+  await d.page.click('#shop-form button.primary');
+  await d.page.waitForFunction(() => !window.FamilyPlannerAccount.status().pending, null, { timeout: 5000 });
+  await c.sync();
+  await c.page.waitForSelector('#shop-list :text("Added by Jo")');
+  assert.doesNotMatch(await c.page.textContent('#shop-list'), /Added by Nathan/, 'your own items say nothing');
+  ok('the shared list updates live on the other phone and shows who added each thing');
+  await d.page.click('[data-nav="settings"]:visible');
   await d.page.click('[data-account="leave"]');
   await d.page.click('#dialog-form button:has-text("Leave")');
   await d.toast(/left the household/);
   await d.page.waitForSelector('#account-card :text("Just you so far")');
-  assert.deepEqual(cloud.data('partner@example.com').food.pantry.map((i) => i.name).sort(), ['milk', 'pasta', 'rice']);
-  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['milk', 'pasta', 'rice']);
-  ok("each person's changes reach the household; leaving keeps a copy and leaves the others' lists alone");
+  assert.deepEqual(cloud.data('partner@example.com').food.pantry.map((i) => i.name).sort(), ['beans', 'milk', 'pasta', 'rice']);
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['beans', 'milk', 'pasta', 'rice']);
+  ok("leaving keeps a copy and leaves the others' lists alone");
 
   for (const x of [a, b, c, d]) assert.deepEqual(x.errors, []);
   ok('no page errors');

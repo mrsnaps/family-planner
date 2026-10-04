@@ -7,7 +7,7 @@ export function localFetcher(handler) {
     const req = {
       method,
       url,
-      headers: {},
+      headers: Object.fromEntries(Object.entries(init.headers || {}).map(([k, v]) => [k.toLowerCase(), v])),
       on(event, cb) {
         // readJson() subscribes to data, end and error; feed it the body after it has.
         if (event === 'data' && body) setTimeout(() => cb(body));

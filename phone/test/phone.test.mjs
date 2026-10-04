@@ -52,3 +52,39 @@ test('account sync never uploads the AI key and keeps each device its own', asyn
   assert.equal(hasContent(local), false);
   assert.equal(hasContent(remote), true);
 });
+
+test('two people saving at once: both sets of changes are kept', async () => {
+  const { merge3 } = await import('../mobile/merge.js');
+  const base = {
+    shopping: { items: [{ id: 'a', name: 'milk', done: false }, { id: 'b', name: 'bread', done: false }, { id: 'c', name: 'eggs', done: false }] },
+    food: { pantry: [{ id: 'p', name: 'rice', quantity: 1 }], history: { added: [{ name: 'rice', at: '1' }] } },
+    family: { adults: 2 },
+  };
+  const mine = structuredClone(base);
+  mine.shopping.items[0].done = true; // ticked milk
+  mine.shopping.items.push({ id: 'd', name: 'tea', done: false }); // added tea
+  mine.food.history.added.push({ name: 'tea', at: '2' });
+  const theirs = structuredClone(base);
+  theirs.shopping.items[1].done = true; // ticked bread
+  theirs.shopping.items = theirs.shopping.items.filter((i) => i.id !== 'c'); // removed eggs
+  theirs.shopping.items.push({ id: 'e', name: 'jam', done: false });
+  theirs.food.history.added.push({ name: 'jam', at: '3' });
+  theirs.family.adults = 3;
+  const out = merge3(base, mine, theirs);
+  assert.deepEqual(out.shopping.items.map((i) => [i.name, i.done]), [['milk', true], ['bread', true], ['jam', false], ['tea', false]]);
+  assert.deepEqual(out.food.history.added.map((e) => e.name), ['rice', 'jam', 'tea']);
+  assert.equal(out.family.adults, 3);
+  assert.deepEqual(out.food.pantry, base.food.pantry);
+
+  // Same thing changed both ways: the first save wins. Removed here but changed there: kept.
+  const m2 = structuredClone(base);
+  m2.shopping.items[0].name = 'oat milk';
+  m2.shopping.items = m2.shopping.items.filter((i) => i.id !== 'b');
+  const t2 = structuredClone(base);
+  t2.shopping.items[0].name = 'semi-skimmed milk';
+  t2.shopping.items[1].done = true;
+  assert.deepEqual(merge3(base, m2, t2).shopping.items.map((i) => i.name), ['semi-skimmed milk', 'bread', 'eggs']);
+  // Nothing changed on one side: just take the other.
+  assert.equal(merge3(base, base, theirs), theirs);
+  assert.equal(merge3(base, mine, base), mine);
+});

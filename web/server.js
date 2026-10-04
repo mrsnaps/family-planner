@@ -92,7 +92,7 @@ function createApp(store) {
     // Open CORS so a phone app or another front end can call the API.
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Family-Member');
     if (req.method === 'OPTIONS') return res.writeHead(204).end();
 
     if (url.pathname.startsWith('/api/')) {

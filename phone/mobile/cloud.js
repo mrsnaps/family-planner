@@ -5,9 +5,11 @@
 import { Preferences } from '@capacitor/preferences';
 import CONFIG from './cloud-config.js';
 import { saveData } from './storage.js';
+import { merge3 } from './merge.js';
 
 const SESSION_KEY = 'fp-account';
 const SYNC_KEY = 'fp-sync';
+const BASE_KEY = 'fp-sync-base'; // the copy last saved or fetched, for merging two people's changes
 const cfg = () => globalThis.__fpCloudConfig || CONFIG;
 
 const MESSAGES = {
@@ -94,6 +96,11 @@ export function createAccount(store) {
   let error = null;
   let pendingChoice = null;
   let changes = 0; // counts saves, so a change made while uploading isn't marked as saved
+  let base = null;
+  const keepBase = (v) => {
+    base = v && JSON.parse(JSON.stringify(v)); // a copy: the app keeps changing its own data in place
+    return saveJson(BASE_KEY, v);
+  };
 
   const emit = (name, detail) => window.dispatchEvent(new CustomEvent(name, { detail }));
   const changed = () => emit('familyplanner:account', status());
@@ -146,36 +153,67 @@ export function createAccount(store) {
     return { status: res.status, ...data };
   }
 
-  // Replace what's on this device with the account's copy.
-  async function adopt(remote, rev, quiet = false) {
+  function replaceLocal(remote) {
     const next = merged(remote, store.data);
     for (const k of Object.keys(store.data)) delete store.data[k];
     Object.assign(store.data, next);
-    await saveData(store.data);
-    sync = { rev, dirty: false, savedAt: new Date().toISOString() };
-    await keepSync();
-    if (!quiet) emit('familyplanner:datachanged', { reason: 'remote' });
+    return saveData(store.data);
   }
 
-  async function upload(baseRev) {
+  // Replace what's on this device with the account's copy.
+  async function adopt(remote, rev, reason = 'remote') {
+    await replaceLocal(remote);
+    sync = { rev, dirty: false, savedAt: new Date().toISOString() };
+    await Promise.all([keepSync(), keepBase(remote)]);
+    if (reason) emit('familyplanner:datachanged', { reason });
+  }
+
+  async function upload(baseRev, tries = 0) {
     const sent = changes;
-    const r = await api('PUT', { data: shareable(store.data), baseRev });
+    const data = shareable(store.data);
+    const r = await api('PUT', { data, baseRev });
     if (r.status === 409) {
-      // Someone saved from another device first: theirs wins, and the UI says so.
-      await adopt(r.data || {}, r.rev);
-      emit('familyplanner:datachanged', { reason: 'conflict' });
+      const theirs = r.data || {};
+      // Someone else saved first. Merge both sets of changes and save again; if that keeps
+      // clashing (or there's nothing to merge from), theirs wins and the UI says so.
+      if (base && tries < 3) {
+        const both = merge3(base, data, theirs);
+        await replaceLocal(both);
+        await keepBase(theirs);
+        sync.rev = r.rev;
+        emit('familyplanner:datachanged', { reason: 'merged' });
+        if (JSON.stringify(both) === JSON.stringify(theirs)) {
+          sync = { rev: r.rev, dirty: changes !== sent, savedAt: new Date().toISOString() };
+          await keepSync();
+          return true;
+        }
+        return upload(r.rev, tries + 1);
+      }
+      await adopt(theirs, r.rev, 'conflict');
       return false;
     }
     sync = { rev: r.rev, dirty: changes !== sent, savedAt: new Date().toISOString() };
-    await keepSync();
+    await Promise.all([keepSync(), keepBase(data)]);
     if (sync.dirty) schedule();
     return true;
   }
 
+  // Quick check for changes saved by someone else (only the version, not the data).
+  async function check() {
+    if (!session || busy || sync.dirty) return status();
+    try {
+      const r = await api('GET', null, '/rev');
+      if (r.rev && r.rev !== sync.rev) return syncNow('live');
+    } catch {
+      // Offline or signed out: the next full sync reports it.
+    }
+    return status();
+  }
+
   // One sync at a time; pushes local changes first, then picks up other devices' changes.
-  function syncNow() {
+  function syncNow(reason = 'remote') {
     if (!session) return Promise.resolve(status());
-    if (busy) return busy.then(() => (sync.dirty ? syncNow() : status()));
+    if (busy) return busy.then(() => (sync.dirty ? syncNow(reason) : status()));
     busy = (async () => {
       changed();
       try {
@@ -183,7 +221,7 @@ export function createAccount(store) {
         else {
           const r = await api('GET');
           if (!r.data) await upload(null);
-          else if (r.rev !== sync.rev) await adopt(r.data, r.rev);
+          else if (r.rev !== sync.rev) await adopt(r.data, r.rev, reason);
           else {
             sync.savedAt = new Date().toISOString();
             await keepSync();
@@ -204,7 +242,8 @@ export function createAccount(store) {
     session = null;
     idToken = null;
     sync = { rev: null, dirty: false, savedAt: null };
-    await Promise.all([saveJson(SESSION_KEY, null), saveJson(SYNC_KEY, null)]);
+    base = null;
+    await Promise.all([saveJson(SESSION_KEY, null), saveJson(SYNC_KEY, null), saveJson(BASE_KEY, null)]);
     changed();
   }
 
@@ -271,7 +310,8 @@ export function createAccount(store) {
 
   return {
     status,
-    syncNow,
+    syncNow: () => syncNow(),
+    check,
     household,
     invite,
     join,
@@ -287,6 +327,7 @@ export function createAccount(store) {
     async restore() {
       session = await loadJson(SESSION_KEY);
       sync = { ...sync, ...(await loadJson(SYNC_KEY)) };
+      base = await loadJson(BASE_KEY);
     },
     signIn,
     // Both devices had data: keep the account's copy or replace it with this device's.

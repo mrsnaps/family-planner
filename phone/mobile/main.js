@@ -31,6 +31,9 @@ async function start() {
     window.FamilyPlannerAccount = account;
     document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && account.syncNow());
     window.addEventListener('online', () => account.syncNow());
+    // While the app is open, look for other people's changes every few seconds, so a list
+    // two people are shopping from stays up to date on both phones.
+    setInterval(() => document.visibilityState === 'visible' && account.check(), globalThis.__fpPollMs || 8000);
   }
   setPersist((data) => {
     saveData(data);

@@ -8,6 +8,7 @@ let tag = 0;
 class Cmd { constructor(input) { this.input = input; } }
 const fakeS3 = {
   GetObjectCommand: class extends Cmd {},
+  HeadObjectCommand: class extends Cmd {},
   PutObjectCommand: class extends Cmd {},
   DeleteObjectCommand: class extends Cmd {},
   S3Client: class {
@@ -17,6 +18,10 @@ const fakeS3 = {
       if (cmd instanceof fakeS3.GetObjectCommand) {
         if (!f) throw Object.assign(new Error('missing'), { name: 'NoSuchKey' });
         return { Body: { transformToString: async () => f.body }, ETag: f.etag, LastModified: new Date() };
+      }
+      if (cmd instanceof fakeS3.HeadObjectCommand) {
+        if (!f) throw Object.assign(new Error('missing'), { name: 'NotFound' });
+        return { ETag: f.etag };
       }
       if (cmd instanceof fakeS3.PutObjectCommand) {
         if ((cmd.input.IfNoneMatch && f) || (cmd.input.IfMatch && (!f || f.etag !== cmd.input.IfMatch))) throw Object.assign(new Error('precondition'), { $metadata: { httpStatusCode: 412 } });
@@ -81,6 +86,12 @@ test('either person saving changes the one household file, and clashes still 409
   const clash = await call('mum', 'PUT', '/data', { data: { pantry: [] }, baseRev: stale });
   assert.equal(clash.status, 409);
   assert.deepEqual(clash.body.data, { pantry: ['rice'] });
+});
+
+test('the version check matches the saved data, for whoever asks in the household', async () => {
+  const data = await call('dad', 'GET', '/data');
+  assert.deepStrictEqual((await call('mum', 'GET', '/rev')).body, { rev: data.body.rev });
+  assert.deepStrictEqual((await call('nobody', 'GET', '/rev')).body, { rev: null });
 });
 
 test('a third person can be invited by someone who joined', async () => {

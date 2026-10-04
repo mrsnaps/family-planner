@@ -1,11 +1,12 @@
 // Household data API behind Cognito sign-in. Deployed inline by infra/cloud.yaml: run
 // `node infra/build.mjs` after editing to copy this file into the template.
 //   GET  /data       the household's saved data       PUT /data { data, baseRev }
+//   GET  /rev        just the saved version, for a cheap "anything new?" check
 //   GET  /household  who's in the household           POST /invite -> { code }
 //   POST /join { code }  join another household       POST /leave
 // Each person signs in with their own email. Someone who hasn't joined a household has
 // their own, under their user id, so accounts made before households existed keep working.
-const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 const s3 = new S3Client({});
 const Bucket = process.env.BUCKET;
@@ -53,6 +54,15 @@ const routes = {
   async 'GET /data'(me) {
     const r = await getJson(dataKey(await householdOf(me.sub)));
     return { data: r.value, rev: r.rev, savedAt: r.savedAt };
+  },
+  async 'GET /rev'(me) {
+    try {
+      const o = await s3.send(new HeadObjectCommand({ Bucket, Key: dataKey(await householdOf(me.sub)) }));
+      return { rev: o.ETag };
+    } catch (e) {
+      if (e.name === 'NotFound' || (e.$metadata && e.$metadata.httpStatusCode === 404)) return { rev: null };
+      throw e;
+    }
   },
   async 'PUT /data'(me, body) {
     if (!body || !body.data || typeof body.data !== 'object' || Array.isArray(body.data)) throw fail(400, 'Nothing to save');

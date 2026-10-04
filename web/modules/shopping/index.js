@@ -79,6 +79,28 @@ function clean(input, existing = {}) {
   return it;
 }
 
+// Food spending: totals from receipts, added by hand. Shows this month against last, a
+// typical week, and roughly what each dinner cooked costs.
+function spendingSummary(entries, cooked = [], now = new Date()) {
+  const month = (d) => d.slice(0, 7);
+  const thisMonth = now.toISOString().slice(0, 7);
+  const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+  const sum = (list) => Math.round(list.reduce((t, e) => t + e.amount, 0) * 100) / 100;
+  const mine = entries.filter((e) => month(e.date) === thisMonth);
+  const since = new Date(now - 56 * 86400000).toISOString().slice(0, 10);
+  const recent = entries.filter((e) => e.date >= since);
+  const first = recent.reduce((m, e) => (e.date < m ? e.date : m), now.toISOString().slice(0, 10));
+  const weeks = Math.max(1, Math.min(8, (now - new Date(first)) / (7 * 86400000)));
+  const dinners = cooked.filter((c) => c.at.slice(0, 7) === thisMonth).length;
+  return {
+    thisMonth: sum(mine),
+    lastMonth: sum(entries.filter((e) => month(e.date) === prev)),
+    perWeek: recent.length ? Math.round((sum(recent) / weeks) * 100) / 100 : null,
+    dinnersCooked: dinners,
+    perDinner: dinners >= 3 && mine.length ? Math.round((sum(mine) / dinners) * 100) / 100 : null,
+  };
+}
+
 function register(router, store, { meals, mealsFor, foodHistory, favourites, pantry, clothesStats, addPantryItem, addClothesItem }) {
   const data = () => store.get('shopping', DEFAULT);
   const dismissed = () => (data().dismissed ||= {});
@@ -90,6 +112,11 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
     habits: habitSuggestions({ history: foodHistory(), pantry: pantry(), favourites: favourites(), mealsFor }),
     dismissed: dismissed(),
   });
+  // Who added something (the signed-in person's email, sent by the app), and the names they go by.
+  const who = (req) => (req && req.headers && req.headers['x-family-member']) || null;
+  const people = () => (data().people ||= {});
+  const newItem = (req, input) => ({ id: newId(), addedAt: new Date().toISOString(), ...clean(input), ...(who(req) ? { addedBy: who(req) } : {}) });
+
   const onList = () => new Set(data().items.filter((i) => !i.done).map(keyOf));
   // One-tap regulars (leaving out what's already on the list) and the last big shop.
   const quick = () => {
@@ -100,10 +127,36 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
       lastShop: shop && { date: shop.date, count: shop.items.length, missing: shop.items.filter((i) => !have.has(keyOf({ kind: 'food', ...i }))).length },
     };
   };
-  router.get('/api/v1/shopping', () => ({ items: data().items, suggestions: ruleSuggestions(), ...quick() }));
+  router.get('/api/v1/shopping', () => ({ items: data().items, suggestions: ruleSuggestions(), people: people(), ...quick() }));
+
+  router.put('/api/v1/shopping/people/me', (req, body) => {
+    const email = who(req);
+    if (!email) throw new HttpError(400, 'Sign in to set your name');
+    const name = String((body && body.name) || '').trim().slice(0, 30);
+    if (name) people()[email] = name;
+    else delete people()[email];
+    store.save();
+    return { email, name: name || null };
+  });
+
+  // Several things at once (a week's shop, a meal's missing ingredients). Skips what's already on the list.
+  router.post('/api/v1/shopping/items/bulk', (req, body) => {
+    if (!body || !Array.isArray(body.items)) throw new HttpError(400, 'Send a list of items');
+    const have = onList();
+    const added = [];
+    for (const input of body.items.slice(0, 100)) {
+      const item = newItem(req, { kind: 'food', ...input });
+      if (have.has(keyOf(item))) continue;
+      have.add(keyOf(item));
+      added.push(item);
+    }
+    data().items.push(...added);
+    store.save();
+    return { added: added.length, skipped: Math.min(body.items.length, 100) - added.length, items: added };
+  });
 
   // "Same as last shop": put everything from the last big shop back on the list.
-  router.post('/api/v1/shopping/repeat-last-shop', () => {
+  router.post('/api/v1/shopping/repeat-last-shop', (req) => {
     const shop = lastShop({ history: foodHistory() });
     if (!shop) throw new HttpError(404, 'No earlier shop to copy yet. Add a few things to the cupboard on the day you shop.');
     const have = onList();
@@ -112,7 +165,7 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
       const item = { kind: 'food', name: i.name, quantity: i.quantity, unit: i.unit };
       if (have.has(keyOf(item))) continue;
       have.add(keyOf(item));
-      added.push({ id: newId(), addedAt: new Date().toISOString(), ...clean(item) });
+      added.push(newItem(req, item));
     }
     data().items.push(...added);
     store.save();
@@ -131,7 +184,7 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
   });
 
   router.post('/api/v1/shopping/items', (req, body) => {
-    const item = { id: newId(), addedAt: new Date().toISOString(), ...clean(body) };
+    const item = newItem(req, body);
     data().items.push(item);
     store.save();
     return item;
@@ -213,6 +266,30 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
     return { ok: true, items: ticked.length - left.size, food, clothes, ...(left.size ? { notDone: left.size } : {}) };
   });
 
+  const spending = () => (data().spending ||= []);
+  const spendingView = () => ({
+    entries: [...spending()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 30),
+    ...spendingSummary(spending(), foodHistory().cooked || []),
+  });
+  router.get('/api/v1/spending', () => spendingView());
+  router.post('/api/v1/spending', (req, body) => {
+    const amount = Number(String((body && body.amount) ?? '').replace(/[£,\s]/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 5000) throw new HttpError(400, 'Enter how much it came to, like 64.20');
+    const date = body.date && !isNaN(new Date(body.date)) ? new Date(body.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const entry = { id: newId(), amount: Math.round(amount * 100) / 100, date, shop: String(body.shop || '').trim().slice(0, 40) || null, ...(who(req) ? { addedBy: who(req) } : {}) };
+    spending().push(entry);
+    store.save();
+    return { entry, ...spendingView() };
+  });
+  router.delete('/api/v1/spending/:id', (req, body, { id }) => {
+    const d = data();
+    const before = spending().length;
+    d.spending = d.spending.filter((e) => e.id !== id);
+    if (d.spending.length === before) throw new HttpError(404, 'No such entry');
+    store.save();
+    return spendingView();
+  });
+
   router.post('/api/v1/shopping/clear-done', () => {
     const d = data();
     d.items = d.items.filter((x) => !x.done);
@@ -223,4 +300,4 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
   return { count: () => data().items.filter((i) => !i.done).length, items: () => data().items, dismissed, ruleSuggestions, keyOf };
 }
 
-module.exports = { register, suggest };
+module.exports = { register, suggest, spendingSummary };

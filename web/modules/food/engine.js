@@ -226,6 +226,69 @@ function estimateMeals(pantry, recipes, portions, { today = new Date().toISOStri
   };
 }
 
+// The week's dinners with a shop in mind. Days the plan leaves empty get the meal that needs
+// least buying (favourites and meals cooked often first, no repeats). Everything missing or
+// running short across the week is added up, allowing for food the earlier days use.
+function shopForWeek(pantry, recipes, portions, { week = [], today = new Date().toISOString().slice(0, 10), favourites = [], often = [], indexRecipes = recipes } = {}) {
+  const index = buildIndex(indexRecipes);
+  const stock = makeStock(pantry, index);
+  const byId = new Map(indexRecipes.map((r) => [r.id, r]));
+  const mains = recipes.filter((r) => !(r.tags || []).includes('breakfast'));
+  const fav = new Set(favourites);
+  const oft = new Set(often);
+  const used = new Set(week.filter(Boolean));
+  const need = new Map();
+  const days = [];
+  for (let d = 0; d < 7; d++) {
+    let recipe = week[d] ? byId.get(week[d]) : null;
+    if (!recipe) {
+      let best = null;
+      for (const r of mains) {
+        if (used.has(r.id)) continue;
+        const e = evaluate(r, portions, stock, today);
+        const cost = e.missing.length + e.short.length / 2 - (fav.has(r.id) ? 1.5 : 0) - (oft.has(r.id) ? 1 : 0);
+        if (!best || cost < best.cost) best = { r, cost };
+      }
+      if (!best) {
+        days.push(null);
+        continue;
+      }
+      recipe = best.r;
+      used.add(recipe.id);
+    }
+    const buy = [];
+    for (const ing of recipe.ingredients) {
+      if (ing.optional) continue;
+      const c = checkIngredient(ing, recipe, portions, stock);
+      if (c.status === 'ok') {
+        consume(c);
+        continue;
+      }
+      const { family, amount } = needFor(ing, recipe, portions);
+      const more = c.status === 'short' ? amount - c.have : amount;
+      if (c.status === 'short') for (const l of stock.get(ing.name.toLowerCase()) || []) if (l.family === family && l.amount !== null) l.amount = 0;
+      const key = `${ing.name}|${family}`;
+      if (!need.has(key)) need.set(key, { name: ing.name, family, amount: 0, for: [] });
+      const n = need.get(key);
+      n.amount += more;
+      if (!n.for.includes(recipe.name)) n.for.push(recipe.name);
+      buy.push(ing.name);
+    }
+    days.push({ id: recipe.id, name: recipe.name, planned: Boolean(week[d]), buy });
+  }
+  const list = [...need.values()].map((n) => {
+    const whole = ['count', 'tin', 'pack'].includes(n.family);
+    const tracked = !['spoon'].includes(n.family);
+    return {
+      name: n.name,
+      quantity: tracked ? (whole ? Math.ceil(n.amount - 0.01) : Math.ceil(n.amount)) : null,
+      unit: tracked ? baseUnit(n.family) : null,
+      for: n.for,
+    };
+  });
+  return { days, list };
+}
+
 // Deduct one cooking of a recipe from the pantry. Returns the updated pantry items.
 function cook(pantry, recipe, portions, recipes) {
   const index = buildIndex(recipes);
@@ -244,4 +307,4 @@ function cook(pantry, recipe, portions, recipes) {
   return { ok: true, pantry: updated };
 }
 
-module.exports = { suggestMeals, estimateMeals, cook, conceptsFor, buildIndex, needFor, UNITS };
+module.exports = { suggestMeals, estimateMeals, shopForWeek, cook, conceptsFor, buildIndex, needFor, UNITS };

@@ -248,6 +248,45 @@ try {
     assert.deepEqual((await api('/food/items')).data.map((i) => i.name).sort(), ['bread', 'milk']);
     assert.deepEqual(errors, []);
     ok('one-tap usuals, "Same as last shop" and "Bought all ticked" on the Shopping page');
+
+    // Bought all ticked then asks what the shop cost; spending shows on the Shopping page.
+    await page.waitForSelector('#dialog-form :text("How much was the shop?")');
+    await page.fill('#dialog-form input[name=amount]', '42.50');
+    await page.fill('#dialog-form input[name=shop]', 'Aldi');
+    await page.click('#dialog-form button:has-text("Add")');
+    await page.waitForSelector('#spending-card :text("£42.50")');
+    await page.fill('#spend-form input[name=amount]', '7.25');
+    await page.click('#spend-form button');
+    await page.waitForSelector('#spending-card :text("£49.75")');
+    assert.match(await page.textContent('#spending-card'), /£49\.75 this month[\s\S]*Aldi/);
+    ok('food spending: asked after a shop, added by hand, totalled for the month');
+
+    // Shop for the week from the home page: fills the gaps and adds what's needed.
+    await page.click('[data-nav="home"]:visible');
+    await page.click('[data-week-shop]');
+    await page.waitForSelector('#dialog-form :text("Shop for the week")');
+    const adds = Number((await page.textContent('#dialog-form button:has-text("to the list")')).match(/\d+/)[0]);
+    assert.ok(adds > 3, `adds ${adds}`);
+    await page.click('#dialog-form button:has-text("to the list")');
+    const said = await page.textContent('#toast.show:has-text("for the week")');
+    const skipped = Number((said.match(/(\d+) already on the list/) || [0, 0])[1]);
+    const listed = (await api('/shopping')).data.items;
+    assert.equal(listed.filter((i) => i.note === 'For the week').length + skipped, adds, said);
+    ok('"Shop for the week" plans every dinner and adds what they need');
+
+    // Hand-me-downs: pass everything a sibling can use in one tap.
+    const amy = (await api('/family/children', 'POST', { name: 'Amy', birthDate: '2018-01-01', clothingSize: '8-9Y', shoeSize: '1' })).data;
+    const ben = (await api('/family/children', 'POST', { name: 'Ben', birthDate: '2020-06-01', clothingSize: '6-7Y', shoeSize: '12' })).data;
+    for (const n of ['Red top', 'Blue top']) await api('/clothes/items', 'POST', { childId: amy.id, name: n, type: 'top', size: '6-7Y', colour: 'red' });
+    await page.click('[data-nav="clothes"]:visible');
+    await page.click('[data-nav="home"]:visible');
+    await page.waitForSelector('[data-pass-all]');
+    assert.match(await page.textContent('#page'), /Counting 2 hand-me-downs from Amy/);
+    await page.click('[data-pass-all]');
+    await page.waitForSelector('#toast.show:has-text("Passed on 2 things")');
+    assert.equal((await api(`/clothes/items?childId=${ben.id}`)).data.length, 2);
+    assert.deepEqual(errors, []);
+    ok('hand-me-downs count towards what a sibling needs, and pass on in one tap');
     await ctx.close();
   }
   console.log('\nAll phone app checks passed.');

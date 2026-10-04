@@ -94,8 +94,9 @@ export async function startMockCloud(port) {
         leave(email);
         return send(res, 200, { ok: true });
       }
-      if (req.url !== '/data') return send(res, 404, { error: 'Not found' });
       const file = files.get(hid);
+      if (req.url === '/rev') return send(res, 200, { rev: file ? file.rev : null });
+      if (req.url !== '/data') return send(res, 404, { error: 'Not found' });
       if (req.method === 'GET') return send(res, 200, file ? { data: JSON.parse(file.body), rev: file.rev, savedAt: new Date().toISOString() } : { data: null, rev: null });
       const body = JSON.parse(raw);
       if (body.baseRev ? file?.rev !== body.baseRev : file) return send(res, 409, { error: 'Changed on another device', data: JSON.parse(file.body), rev: file.rev });
