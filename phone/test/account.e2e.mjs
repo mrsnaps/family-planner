@@ -239,9 +239,10 @@ try {
   await d.fill({ password: 'wrong-pass1' }, 'Delete account');
   await d.page.waitForSelector('#dialog-form :text("That password isn\'t right")');
   assert.ok(cloud.hasUser('partner@example.com'));
-  await d.fill({ password: 'partner123' }, 'Delete account');
-  await d.page.waitForFunction(() => !window.FamilyPlannerAccount?.status().signedIn && document.querySelector('#page')?.children.length > 0, null, { timeout: 5000 });
-  await d.page.waitForLoadState('load');
+  // Clearing the device reloads the app.
+  await Promise.all([d.page.waitForEvent('load'), d.fill({ password: 'partner123' }, 'Delete account')]);
+  await d.page.waitForFunction(() => document.querySelector('#page')?.children.length > 0);
+  assert.equal((await d.status()).signedIn, false);
   assert.equal(cloud.hasUser('partner@example.com'), false);
   assert.equal(cloud.data('partner@example.com'), null);
   assert.deepEqual(await pantry(d), []);

@@ -1,7 +1,7 @@
 // Home screen version only: keeps the app working offline. Pages and code come from
 // the network when there is one (so updates show up), and from the cache when there isn't.
 const CACHE = 'family-planner-v1';
-const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/icon.svg', '/manifest.webmanifest', '/mobile/mobile.js', '/mobile/ios.css'];
+const SHELL = ['/', '/index.html', '/privacy.html', '/app.js', '/styles.css', '/icon.svg', '/manifest.webmanifest', '/mobile/mobile.js', '/mobile/ios.css'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

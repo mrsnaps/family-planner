@@ -2,7 +2,7 @@
 // copy when there's no connection. Writes always need the server.
 const SHELL = 'fp-shell-v3';
 const DATA = 'fp-data-v1';
-const FILES = ['/', '/index.html', '/app.js', '/styles.css', '/icon.svg', '/manifest.webmanifest'];
+const FILES = ['/', '/index.html', '/privacy.html', '/app.js', '/styles.css', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

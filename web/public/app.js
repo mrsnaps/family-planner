@@ -1647,7 +1647,7 @@ async function accountSignIn(email = '') {
 async function accountSignUp(email = '') {
   const created = await accountStep({
     title: 'Create an account',
-    intro: 'This is your own login. To share lists with someone, one of you invites the other from Settings once you are signed in.',
+    intro: 'This is your own login. To share lists with someone, one of you invites the other from Settings once you are signed in. <a href="/privacy.html">How your data is kept</a>',
     fields: (v) => emailField(v.email || email) + field('password', 'Password (8 or more characters, with a number)', 'password', '', 'autocomplete="new-password"') +
       '<p class="hint" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">Already have an account? <button type="button" class="btn sm" data-account="to-signin">Sign in</button></p>',
     ok: 'Create account',
@@ -1926,7 +1926,8 @@ async function renderSettings() {
         </div>
       </div>
     </div>
-    <p class="muted small" id="about-line" style="text-align:center;margin:24px 0 8px;user-select:none">Family Planner</p>`;
+    <p class="muted small" id="about-line" style="text-align:center;margin:24px 0 8px;user-select:none">Family Planner</p>
+    <p class="small" style="text-align:center;margin:0 0 8px"><a href="/privacy.html" id="privacy-link">Privacy: how your family's data is kept</a></p>`;
   if (!household) loadHousehold();
 }
 

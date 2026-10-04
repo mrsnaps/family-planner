@@ -116,3 +116,25 @@ test('the page only runs its own scripts', () => {
   const hash = crypto.createHash('sha256').update(inline).digest('base64');
   assert.ok(csp.includes(`'sha256-${hash}'`), 'update the hash in index.html after changing the inline script');
 });
+
+test('the privacy page names every outside service the app talks to', async (t) => {
+  const { root } = await start(t);
+  const res = await fetch(root + '/privacy.html');
+  assert.strictEqual(res.status, 200);
+  const page = await res.text();
+  assert.doesNotMatch(page, /<script/);
+  // If the app starts using a new outside service, say so on the privacy page.
+  const named = { 'open-meteo.com': 'Open-Meteo', 'openfoodfacts.org': 'Open Food Facts', 'fonts.googleapis.com': 'Google Fonts', 'amazonaws.com': 'Amazon', 'tesco.com': 'supermarket', 'api.anthropic.com': 'Claude', 'api.openai.com': 'ChatGPT', 'generativelanguage.googleapis.com': 'Gemini', 'openrouter.ai': 'OpenRouter', 'api.mistral.ai': 'AI service' };
+  const code = ['public/app.js', 'public/index.html', 'modules'].map((p) => {
+    const full = path.join(__dirname, '..', p);
+    return fs.statSync(full).isDirectory()
+      ? fs.readdirSync(full, { recursive: true }).filter((f) => f.endsWith('.js')).map((f) => fs.readFileSync(path.join(full, f), 'utf8')).join('\n')
+      : fs.readFileSync(full, 'utf8');
+  }).join('\n');
+  const hosts = new Set([...code.matchAll(/https:\/\/([a-z0-9.-]+\.[a-z]{2,})/g)].map((m) => m[1]));
+  for (const host of hosts) {
+    const key = Object.keys(named).find((k) => host === k || host.endsWith('.' + k));
+    assert.ok(key || /^(fonts\.gstatic\.com|www\.(sainsburys\.co\.uk|ocado\.com))$/.test(host), `privacy.html doesn't cover ${host}`);
+    if (key) assert.ok(page.includes(named[key]), `privacy.html should mention ${named[key]} (${host})`);
+  }
+});
