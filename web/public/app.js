@@ -1138,6 +1138,40 @@ const IS_APP = Boolean(window.FamilyPlannerNative);
 // ---------- account (signing in and saving online) ----------
 // Only the home screen and iPhone versions provide window.FamilyPlannerAccount.
 const ACCOUNT = window.FamilyPlannerAccount || null;
+let household = null; // who's in the household, as last fetched (each person has their own login)
+
+const prettyCode = (c) => `${c.slice(0, 4)}-${c.slice(4)}`;
+
+function householdBlock() {
+  if (!ACCOUNT.household) return '';
+  if (!household) return '<p class="hint" style="margin-top:10px" id="household-line">Checking who is in your household…</p>';
+  const names = household.members.map((m) => `<li>${esc(m.email)}${m.you ? ' <span class="muted">(you)</span>' : ''}</li>`).join('');
+  return `
+    <div id="household-line" style="margin-top:12px">
+      <strong>${household.shared ? 'Your household' : 'Just you so far'}</strong>
+      <ul class="small" style="margin:6px 0 0 18px">${names}</ul>
+      <p class="hint" style="margin-top:6px">${household.shared ? 'Everyone here signs in with their own email and sees the same lists.' : 'Invite your partner or anyone else who helps, so they can sign in with their own email and share the same lists.'}</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn sm" data-account="invite">${icon('plus')} Invite someone</button>
+        <button class="btn sm ghost" data-account="join">Join a household</button>
+        ${household.joined ? '<button class="btn sm ghost" data-account="leave">Leave household</button>' : ''}
+      </div>
+    </div>`;
+}
+
+async function loadHousehold() {
+  if (!ACCOUNT?.household || !ACCOUNT.status().signedIn) return;
+  try {
+    household = await ACCOUNT.household();
+  } catch {
+    household = null;
+    const line = $('#household-line');
+    if (line) line.textContent = "Couldn't check who is in your household. Try again when you're online.";
+    return;
+  }
+  const card = $('#account-card');
+  if (card) card.outerHTML = accountCard();
+}
 
 function accountCard() {
   if (!ACCOUNT) return '';
@@ -1152,8 +1186,9 @@ function accountCard() {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <button class="btn" data-account="sync">${icon('upload')} Save now</button>
           <button class="btn ghost" data-account="signout">Sign out</button>
-        </div>` : `
-        <p class="hint" style="margin-top:8px">Sign in to save your family's data online, so it's safe and the same on your iPhone and iPad. Use one account for the household and sign in with it on each device.</p>
+        </div>
+        ${householdBlock()}` : `
+        <p class="hint" style="margin-top:8px">Sign in to save your family's data online, so it's safe and the same on your iPhone and iPad. Everyone in the family can have their own login and share one household.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <button class="btn primary" data-account="signin">Sign in</button>
           <button class="btn" data-account="signup">Create account</button>
@@ -1215,7 +1250,7 @@ async function accountSignIn(email = '') {
 async function accountSignUp() {
   const created = await accountStep({
     title: 'Create an account',
-    intro: 'One account for the household. Use it to sign in on each of your devices.',
+    intro: 'This is your own login. To share lists with someone, one of you invites the other from Settings once you are signed in.',
     fields: (v) => emailField(v.email) + field('password', 'Password (8 or more characters, with a number)', 'password', '', 'autocomplete="new-password"'),
     ok: 'Create account',
     run: async (v) => {
@@ -1263,7 +1298,58 @@ async function accountForgot(email = '') {
   await refresh();
 }
 
+async function accountInvite() {
+  let r;
+  try {
+    r = await ACCOUNT.invite();
+  } catch (e) {
+    return toast(e.message);
+  }
+  await ask({
+    title: 'Invite someone',
+    body: `<p class="muted">Give them this code. They create their own account in Family Planner, then go to Settings, tap <strong>Join a household</strong> and enter it.</p>
+      <p style="font-size:1.8rem;font-weight:700;letter-spacing:.12em;text-align:center;margin:16px 0" id="invite-code">${esc(prettyCode(r.code))}</p>
+      <p class="hint">The code works for ${r.days || 7} days. Anyone with it can join, so only share it with family.</p>`,
+    ok: 'Done',
+  });
+  loadHousehold();
+}
+
+async function accountJoin() {
+  const joined = await accountStep({
+    title: 'Join a household',
+    intro: "Enter the code from the person who invited you. This device switches to that household's lists, and what's only on this device is replaced.",
+    fields: (v) => field('code', 'Invite code', 'text', v.code || '', 'autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABCD-2345"'),
+    ok: 'Join',
+    run: async (v) => {
+      if (!String(v.code || '').trim()) throw new Error('Enter the invite code.');
+      return ACCOUNT.join(v.code);
+    },
+  });
+  if (!joined) return;
+  toast(joined.invitedBy ? `You've joined ${joined.invitedBy}'s household` : "You're in that household already");
+  household = null;
+  await refresh();
+  loadHousehold();
+}
+
+async function accountLeave() {
+  if (!await ask({ title: 'Leave this household?', body: "<p class=\"muted\">You'll go back to your own lists, starting with a copy of what's here now. The others keep the household.</p>", ok: 'Leave', danger: true })) return;
+  try {
+    await ACCOUNT.leave();
+  } catch (e) {
+    return toast(e.message);
+  }
+  toast('You left the household');
+  household = null;
+  await refresh();
+  loadHousehold();
+}
+
 async function accountAction(what) {
+  if (what === 'invite') return accountInvite();
+  if (what === 'join') return accountJoin();
+  if (what === 'leave') return accountLeave();
   if (what === 'signin') return accountSignIn();
   if (what === 'signup') return accountSignUp();
   if (what === 'forgot') {
@@ -1284,6 +1370,7 @@ async function accountAction(what) {
   if (what === 'signout') {
     if (!await ask({ title: 'Sign out?', body: '<p class="muted">Your data stays on this device, but changes here stop being saved online until you sign in again.</p>', ok: 'Sign out' })) return;
     await ACCOUNT.signOut();
+    household = null;
     toast('Signed out');
     return refresh();
   }
@@ -1397,6 +1484,7 @@ async function renderSettings() {
         </div>
       </div>
     </div>`;
+  if (!household) loadHousehold();
 }
 
 // ---------- photos, barcodes, AI ----------

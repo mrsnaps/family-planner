@@ -147,7 +147,47 @@ try {
   assert.equal((await c.status()).signedIn, true);
   ok('forgotten password: code by email, new password, signed in');
 
-  for (const d of [a, b, c]) assert.deepEqual(d.errors, []);
+  // A second person gets their own login and joins the household with an invite code.
+  await c.page.waitForSelector('#account-card :text("Just you so far")');
+  await c.page.click('[data-account="invite"]');
+  const code = (await c.page.textContent('#invite-code')).trim();
+  assert.match(code, /^\w{4}-\w{4}$/);
+  await c.page.click('#dialog-form button:has-text("Done")');
+  const d = await open();
+  await d.api('/food/items', 'POST', { name: 'crisps', quantity: 1, unit: 'bag' });
+  await d.page.click('[data-nav="settings"]:visible');
+  await d.page.click('[data-account="signup"]');
+  await d.fill({ email: 'partner@example.com', password: 'partner123' }, 'Create account');
+  await d.fill({ code: '123456' }, 'Confirm');
+  await d.toast(/Account created/);
+  assert.deepEqual(cloud.data('partner@example.com').food.pantry.map((i) => i.name), ['crisps']);
+  await d.page.waitForSelector('#account-card [data-account="join"]');
+  await d.page.click('[data-account="join"]');
+  await d.fill({ code: 'nope' }, 'Join');
+  await d.page.waitForSelector('#dialog-form :text("isn\'t right or has expired")');
+  await d.fill({ code: code.toLowerCase() }, 'Join');
+  await d.toast(new RegExp(`joined ${EMAIL}'s household`));
+  assert.deepEqual(await pantry(d), ['pasta', 'rice']);
+  await d.page.waitForSelector('#account-card :text("Your household")');
+  assert.match(await d.page.textContent('#account-card'), new RegExp(`${EMAIL}[\\s\\S]*partner@example.com \\(you\\)`));
+  ok('a second person signs up with their own email and joins with an invite code');
+
+  // Their changes land in the shared household; leaving takes a copy back to their own.
+  await d.api('/food/items', 'POST', { name: 'milk', quantity: 2, unit: 'l' });
+  await d.page.waitForFunction(() => !window.FamilyPlannerAccount.status().pending, null, { timeout: 5000 });
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['milk', 'pasta', 'rice']);
+  await c.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await c.toast(/changes from your other device/);
+  assert.deepEqual(await pantry(c), ['milk', 'pasta', 'rice']);
+  await d.page.click('[data-account="leave"]');
+  await d.page.click('#dialog-form button:has-text("Leave")');
+  await d.toast(/left the household/);
+  await d.page.waitForSelector('#account-card :text("Just you so far")');
+  assert.deepEqual(cloud.data('partner@example.com').food.pantry.map((i) => i.name).sort(), ['milk', 'pasta', 'rice']);
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['milk', 'pasta', 'rice']);
+  ok("each person's changes reach the household; leaving keeps a copy and leaves the others' lists alone");
+
+  for (const x of [a, b, c, d]) assert.deepEqual(x.errors, []);
   ok('no page errors');
 } finally {
   await browser.close();

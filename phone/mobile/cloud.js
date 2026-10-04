@@ -135,14 +135,14 @@ export function createAccount(store) {
     return idToken;
   }
 
-  async function api(method, body) {
-    const res = await call(cfg().apiUrl + '/data', {
+  async function api(method, body, path = '/data') {
+    const res = await call(cfg().apiUrl + path, {
       method,
       headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
       body: body && JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok && res.status !== 409) throw new AccountError('Api', data.error || data.message || `Saving online failed (${res.status})`);
+    if (!res.ok && !(res.status === 409 && path === '/data')) throw new AccountError('Api', data.error || data.message || `Saving online failed (${res.status})`);
     return { status: res.status, ...data };
   }
 
@@ -231,9 +231,51 @@ export function createAccount(store) {
     return { done: true };
   }
 
+  // Household: each person has their own login; invite codes let them share one household.
+  const signedIn = () => {
+    if (!session) throw new AccountError('SignedOut', 'Sign in first.');
+  };
+  const settle = () => (busy ? busy.catch(() => {}) : Promise.resolve());
+
+  async function household() {
+    signedIn();
+    return api('GET', null, '/household');
+  }
+  async function invite() {
+    signedIn();
+    return api('POST', {}, '/invite');
+  }
+  // Joining swaps this device over to the other household's data.
+  async function join(code) {
+    signedIn();
+    await settle();
+    const r = await api('POST', { code }, '/join');
+    const remote = await api('GET');
+    if (remote.data) await adopt(remote.data, remote.rev);
+    else await upload(null);
+    error = null;
+    changed();
+    return r;
+  }
+  // Leaving goes back to your own household, starting from a copy of what's on this device.
+  async function leave() {
+    signedIn();
+    await settle();
+    await api('POST', {}, '/leave');
+    const own = await api('GET');
+    await upload(own.rev || null);
+    error = null;
+    changed();
+    return status();
+  }
+
   return {
     status,
     syncNow,
+    household,
+    invite,
+    join,
+    leave,
     // Called by main.js whenever the app saves.
     noteChange() {
       if (!session) return;
