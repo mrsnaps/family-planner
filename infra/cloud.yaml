@@ -6,6 +6,12 @@ Parameters:
     Type: String
     Default: https://main.d3ofenwxb2m5fu.amplifyapp.com
     Description: Address of the hosted app, allowed to call the API.
+  FeedbackEmail:
+    Type: String
+    Default: ''
+    Description: Where "Send feedback" messages from the app are emailed (AWS asks this address to confirm first). Leave empty to turn feedback off.
+Conditions:
+  HasFeedbackEmail: !Not [!Equals [!Ref FeedbackEmail, '']]
 
 Resources:
   UserPool:
@@ -54,6 +60,13 @@ Resources:
         # so lots of saves can't pile up storage costs.
         Rules: [{ Id: old-versions, Status: Enabled, NoncurrentVersionExpiration: { NoncurrentDays: 1, NewerNoncurrentVersions: 30 } }]
 
+  # "Send feedback" in the app publishes here, and it's emailed to FeedbackEmail.
+  FeedbackTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Family Planner
+      Subscription: !If [HasFeedbackEmail, [{ Protocol: email, Endpoint: !Ref FeedbackEmail }], !Ref AWS::NoValue]
+
   DataFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -76,6 +89,7 @@ Resources:
               # Listing old versions and invite codes lets "Delete my account" remove everything.
               - { Effect: Allow, Action: [s3:ListBucket, s3:ListBucketVersions], Resource: !GetAtt DataBucket.Arn }
               - { Effect: Allow, Action: cognito-idp:AdminDeleteUser, Resource: !GetAtt UserPool.Arn }
+              - { Effect: Allow, Action: sns:Publish, Resource: !Ref FeedbackTopic }
 
   DataFunction:
     Type: AWS::Lambda::Function
@@ -89,6 +103,7 @@ Resources:
         Variables:
           BUCKET: !Ref DataBucket
           USER_POOL_ID: !Ref UserPool
+          FEEDBACK_TOPIC: !If [HasFeedbackEmail, !Ref FeedbackTopic, '']
           # API Gateway's own CORS settings reject the iPhone app's capacitor:// origin, so CORS is answered here.
           ORIGINS: !Sub '${AppOrigin} capacitor://localhost http://localhost:5173 http://localhost:5175'
       Code:
@@ -100,13 +115,17 @@ Resources:
           //   GET  /household  who's in the household           POST /invite -> { code }
           //   POST /join { code }  join another household       POST /leave
           //   POST /delete-account  removes the login and everything only this person can see
+          //   POST /feedback { text, page }  emails the app's owner (FEEDBACK_TOPIC), up to 10 a day each
           // Each person signs in with their own email. Someone who hasn't joined a household has
           // their own, under their user id, so accounts made before households existed keep working.
           const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
           const { CognitoIdentityProviderClient, AdminDeleteUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
+          const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
           const crypto = require('crypto');
           const s3 = new S3Client({});
           const cognito = new CognitoIdentityProviderClient({});
+          const sns = new SNSClient({});
+          const FEEDBACK_PER_DAY = 10;
           const Bucket = process.env.BUCKET;
           const ORIGINS = process.env.ORIGINS.split(' ');
           const MAX = 2 * 1024 * 1024; // a busy household's data is well under this
@@ -132,6 +151,7 @@ Resources:
           const dataKey = (hid) => `households/${hid}.json`;
           const peopleKey = (hid) => `households/${hid}.members.json`;
           const inviteKey = (code) => `invites/${code}.json`;
+          const feedbackKey = (sub) => `members/${sub}.feedback.json`;
 
           async function householdOf(sub) {
             const m = await getJson(memberKey(sub));
@@ -280,10 +300,29 @@ Resources:
             }
           }
 
+          routes['POST /feedback'] = async (me, body) => {
+            const text = String((body && body.text) || '').trim().slice(0, 2000);
+            if (!text) throw fail(400, 'Write something first.');
+            if (!process.env.FEEDBACK_TOPIC) throw fail(503, "Feedback isn't set up yet.");
+            const today = new Date().toISOString().slice(0, 10);
+            const sent = (await getJson(feedbackKey(me.sub))).value;
+            const count = sent && sent.day === today ? sent.count : 0;
+            if (count >= FEEDBACK_PER_DAY) throw fail(429, "That's a lot of feedback for one day. Thank you! Try again tomorrow.");
+            await putJson(feedbackKey(me.sub), { day: today, count: count + 1 });
+            const page = String((body && body.page) || '').replace(/[^\w -]/g, '').slice(0, 30);
+            await sns.send(new PublishCommand({
+              TopicArn: process.env.FEEDBACK_TOPIC,
+              Subject: 'Family Planner feedback',
+              Message: `From: ${me.ownEmail || 'someone signed in'}\nPage: ${page || 'not given'}\n\n${text}`,
+            }));
+            return { ok: true };
+          };
+
           routes['POST /delete-account'] = async (me) => {
             const hid = await householdOf(me.sub);
             for (const h of new Set([hid, me.sub])) await forgetHousehold(h, me);
             await purge(memberKey(me.sub));
+            await purge(feedbackKey(me.sub));
             // Invite codes this person made (they'd stop working anyway, but they hold their email).
             const inv = await s3.send(new ListObjectsV2Command({ Bucket, Prefix: 'invites/' }));
             for (const o of inv.Contents || []) {

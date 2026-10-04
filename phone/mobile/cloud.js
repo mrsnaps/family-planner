@@ -348,6 +348,11 @@ export function createAccount(store) {
     status,
     syncNow: () => syncNow(),
     deleteAccount,
+    // Emails a message to whoever runs the app (infra/lambda/index.js POST /feedback).
+    async feedback(text, page) {
+      signedIn();
+      return api('POST', { text, page }, '/feedback');
+    },
     check,
     household,
     invite,

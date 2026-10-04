@@ -46,14 +46,21 @@ const fakeCognito = {
   AdminDeleteUserCommand: class extends Cmd {},
   CognitoIdentityProviderClient: class { async send(cmd) { deletedUsers.push(cmd.input); return {}; } },
 };
+const published = [];
+const fakeSns = {
+  PublishCommand: class extends Cmd {},
+  SNSClient: class { async send(cmd) { published.push(cmd.input); return {}; } },
+};
 const load = Module._load;
 Module._load = function (req, ...rest) {
   if (req === '@aws-sdk/client-s3') return fakeS3;
   if (req === '@aws-sdk/client-cognito-identity-provider') return fakeCognito;
+  if (req === '@aws-sdk/client-sns') return fakeSns;
   return load.call(this, req, ...rest);
 };
 process.env.BUCKET = 'test';
 process.env.USER_POOL_ID = 'pool';
+process.env.FEEDBACK_TOPIC = 'topic';
 process.env.ORIGINS = 'https://app.example';
 const { handler } = require('../lambda/index.js');
 
@@ -189,4 +196,17 @@ test('when the person who set up a household deletes their account, the others k
   // Dad can still save, and can still invite someone new.
   assert.equal((await save('dad', { pantry: ['eggs'] })).status, 200);
   assert.equal((await call('dad', 'POST', '/invite')).status, 200);
+});
+
+test('feedback is emailed to the owner with who sent it, up to 10 a day each', async () => {
+  assert.equal((await call('fan', 'POST', '/feedback', { text: '   ' })).status, 400);
+  const r = await call('fan', 'POST', '/feedback', { text: 'Love the kitchen screen', page: 'kitchen<script>' });
+  assert.equal(r.status, 200);
+  assert.equal(published.at(-1).TopicArn, 'topic');
+  assert.equal(published.at(-1).Message, 'From: fan@example.com\nPage: kitchenscript\n\nLove the kitchen screen');
+  for (let i = 0; i < 9; i++) await call('fan', 'POST', '/feedback', { text: 'again' });
+  assert.equal((await call('fan', 'POST', '/feedback', { text: 'one more' })).status, 429);
+  assert.equal((await call('other', 'POST', '/feedback', { text: 'hi' })).status, 200);
+  await call('fan', 'POST', '/delete-account');
+  assert.equal([...files.keys()].some((k) => k.includes('fan')), false);
 });

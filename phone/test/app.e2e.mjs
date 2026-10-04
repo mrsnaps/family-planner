@@ -445,6 +445,44 @@ try {
     ok(`customise and the kitchen screen work on a ${name}`);
     await ctx.close();
   }
+  // 10. First-run guide: a new family is walked through children, cupboards and clothes.
+  {
+    const { ctx, page, api, errors } = await open();
+    await page.waitForSelector('#guide-card :text("0 of 3 done")');
+    await page.click('#guide-card button:has-text("Start")');
+    await page.waitForSelector('#guide-banner :text("Step 1 of 3: Add your children")');
+    await page.screenshot({ path: path.join(SHOTS, 'guide-step.png') });
+    await api('/family/children', 'POST', { name: 'Ava', birthDate: '2019-05-01', clothingSize: '6-7Y' });
+    await page.evaluate(() => document.querySelector('[data-nav="family"]').click());
+    await page.waitForSelector('#guide-banner button:has-text("Next: Add what\'s in the cupboards")');
+    await page.click('#guide-banner button:has-text("Next")');
+    await page.waitForSelector('#guide-banner :text("Step 2 of 3")');
+    await api('/food/items', 'POST', { name: 'Pasta', quantity: 1, unit: 'pack' });
+    await page.evaluate(() => document.querySelector('[data-nav="home"]').click());
+    await page.waitForSelector('#guide-card :text("2 of 3 done")');
+    await page.screenshot({ path: path.join(SHOTS, 'guide-home.png') });
+    const kid = (await api('/family')).data.children[0].id;
+    const added = await api('/clothes/items', 'POST', { childId: kid, name: 'Blue jeans', type: 'bottom', size: '6-7Y' });
+    assert.equal(added.status, 200, JSON.stringify(added.data));
+    await page.evaluate(() => document.querySelector('[data-nav="clothes"]').click());
+    await page.waitForSelector('#toast.show:has-text("all set up")');
+    assert.equal(await page.$('#guide-banner'), null);
+    await page.evaluate(() => document.querySelector('[data-nav="home"]').click());
+    await page.waitForSelector('.kpi');
+    assert.equal(await page.$('#guide-card'), null);
+    // Skipping on another fresh device hides it for good.
+    const other = await open();
+    await other.page.click('[data-guide="skip"]');
+    await other.page.waitForSelector('#toast.show:has-text("No problem")');
+    assert.equal(await other.page.$('#guide-card'), null);
+    await other.page.evaluate(() => document.querySelector('[data-nav="family"]').click());
+    await other.page.waitForSelector('#page .card');
+    assert.equal(await other.page.$('#guide-banner'), null);
+    assert.deepEqual([...errors, ...other.errors], []);
+    ok('first-run guide walks a new family through the three steps, and can be skipped');
+    await other.ctx.close();
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();

@@ -16,6 +16,7 @@ export async function startMockCloud(port) {
     memberOf.delete(email);
   };
   const calls = [];
+  const feedback = [];
   let n = 0;
   const CODE = '123456';
 
@@ -89,6 +90,12 @@ export async function startMockCloud(port) {
         people.get(inv.household).push(email);
         return send(res, 200, { ok: true, invitedBy: inv.by });
       }
+      if (req.url === '/feedback') {
+        const text = String(JSON.parse(raw).text || '').trim();
+        if (!text) return send(res, 400, { error: 'Write something first.' });
+        feedback.push({ from: email, ...JSON.parse(raw) });
+        return send(res, 200, { ok: true });
+      }
       if (req.url === '/delete-account') {
         leave(email);
         if (!people.get(email)?.length) files.delete(email);
@@ -116,6 +123,7 @@ export async function startMockCloud(port) {
     url: `http://localhost:${port}`,
     calls,
     hasUser: (email) => users.has(email),
+    feedback,
     data: (email) => (files.get(home(email)) ? JSON.parse(files.get(home(email)).body) : null),
     close: () => server.close(),
   };

@@ -231,6 +231,18 @@ try {
   assert.deepEqual(await pantry(c), ['beans', 'milk', 'pasta', 'rice']);
   ok('the demo stays on the device: nothing is saved online, and the real lists come back');
 
+  // Feedback from Settings is sent with who sent it.
+  await d.page.click('[data-nav="settings"]:visible');
+  await d.page.waitForSelector('#feedback-form');
+  await d.page.waitForFunction(() => !window.FamilyPlannerAccount.status().syncing);
+  await d.page.waitForTimeout(300); // let the household line finish loading
+  await d.page.fill('#feedback-form textarea', 'Can we have a pudding list?');
+  await d.page.click('#feedback-form button');
+  await d.toast(/feedback has been sent/);
+  assert.deepEqual(cloud.feedback.at(-1), { from: 'partner@example.com', text: 'Can we have a pudding list?', page: 'settings' });
+  assert.equal(await d.page.inputValue('#feedback-form textarea'), '');
+  ok('feedback from Settings is sent with who sent it');
+
   // Deleting an account needs the password, removes the login and its online lists, and
   // (by default) clears the device. Everyone else's lists are left alone.
   const others = JSON.stringify(cloud.data(EMAIL));

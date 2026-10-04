@@ -252,6 +252,10 @@ async function refresh() {
   $('#page-actions').innerHTML = '';
   $('#brand-sub').textContent = `${plural(state.family.people, 'person', 'people')} at home`;
   await guard(page.render)();
+  if (page.id !== 'home' && guideMode() === 'on') {
+    const done = await guideState().catch(() => null);
+    if (done) guideBanner(done);
+  }
   if (page.id !== 'kitchen') {
     $('#page').classList.remove('fade-in');
     void $('#page').offsetWidth;
@@ -364,6 +368,62 @@ const emptyState = (emoji, text, action = '') =>
   `<div class="empty"><span class="big-emoji">${emoji}</span>${text}${action ? `<div style="margin-top:12px">${action}</div>` : ''}</div>`;
 
 // ---------- home ----------
+// ---------- first-run guide ----------
+// A new family is walked through three steps (children, cupboards, clothes). It starts the first
+// time Home opens with nothing set up, shows a hint on each step's page, and ends once all three
+// are done or the person skips it. Kept per device in localStorage 'fp-guide'.
+const GUIDE_STEPS = [
+  { id: 'family', page: 'family', icon: 'people', title: 'Add your children', hint: "Add each child with their birth date, and their clothing and shoe sizes if you know them. Set how many grown-ups live with you under Household." },
+  { id: 'food', page: 'food', icon: 'food', title: "Add what's in the cupboards", hint: "Add a few things from your cupboards, fridge and freezer. The quick-add buttons are fastest. Meal ideas use whatever's here." },
+  { id: 'clothes', page: 'clothes', icon: 'shirt', title: "Add the kids' clothes", hint: "Add some of each child's clothes. Outfit ideas and the \"what to buy next\" forecast use them." },
+];
+const guideMode = () => { try { return localStorage.getItem('fp-guide'); } catch { return 'done'; } };
+const setGuide = (v) => { try { localStorage.setItem('fp-guide', v); } catch {} };
+async function guideProgress() {
+  const [food, clothes] = await Promise.all([api('/food/items'), api('/clothes/items')]);
+  return { family: state.family.children.length > 0, food: food.length > 0, clothes: clothes.length > 0 };
+}
+// Checks the steps; when the last one is done the guide ends with a cheer.
+async function guideState() {
+  if (guideMode() !== 'on' || state.demo?.on) return null;
+  const done = await guideProgress();
+  if (GUIDE_STEPS.every((st) => done[st.id])) {
+    setGuide('done');
+    toast("You're all set up! Suggestions now use your family's own lists.");
+    return null;
+  }
+  return done;
+}
+function guideCard(done) {
+  const count = GUIDE_STEPS.filter((st) => done[st.id]).length;
+  const next = GUIDE_STEPS.find((st) => !done[st.id]);
+  return `<div class="card" id="guide-card" style="margin-bottom:16px">
+    <div class="card-head"><h2>Welcome! Let's set things up</h2><span class="pill plain">${count} of ${GUIDE_STEPS.length} done</span></div>
+    <p class="hint" style="margin-top:6px">Three quick steps and the app starts suggesting meals, outfits and shopping for your family.</p>
+    <ul class="list" style="margin-top:8px">${GUIDE_STEPS.map((st, i) => `<li class="row">
+      <span class="emoji">${done[st.id] ? '✅' : `<strong>${i + 1}</strong>`}</span>
+      <div class="grow"><div class="title" style="${done[st.id] ? 'text-decoration:line-through;opacity:.6' : ''}">${esc(st.title)}</div></div>
+      ${done[st.id] ? '' : `<button class="btn sm ${st === next ? 'primary' : ''}" data-nav="${st.page}">${st === next ? 'Start' : 'Go'}</button>`}</li>`).join('')}</ul>
+    <p class="small" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span class="muted">Optional:</span>
+      <button class="chip" data-nav="settings">${icon('sparkle')} Pick an AI</button>
+      <button class="chip" data-nav="settings">${icon('edit')} Colours and tabs</button>
+      <button class="btn ghost sm" data-guide="skip">I'll do this later</button>
+    </p></div>`;
+}
+// The hint at the top of a step's own page.
+function guideBanner(done) {
+  const i = GUIDE_STEPS.findIndex((st) => st.page === state.page);
+  if (i < 0) return;
+  const st = GUIDE_STEPS[i];
+  const next = GUIDE_STEPS.find((x) => !done[x.id] && x !== st);
+  $('#page').insertAdjacentHTML('afterbegin', `<div class="banner" id="guide-banner" style="margin-bottom:16px;background:var(--accent-soft);color:var(--accent)">
+    <span style="font-size:22px">${done[st.id] ? '✅' : '👋'}</span>
+    <div class="grow"><div>Step ${i + 1} of ${GUIDE_STEPS.length}: ${esc(st.title)}</div><div class="small" style="font-weight:400;margin-top:2px">${done[st.id] ? 'Done. Add more any time.' : esc(st.hint)}</div></div>
+    ${done[st.id] && next ? `<button class="btn sm primary" data-nav="${next.page}">Next: ${esc(next.title)}</button>` : ''}
+    <button class="btn ghost sm" data-nav="home">Back to the checklist</button></div>`);
+}
+
 async function renderHome() {
   state.ai = await api('/ai/settings');
   const [d, targets] = await Promise.all([api('/dashboard'), api('/clothes/targets')]);
@@ -377,19 +437,14 @@ async function renderHome() {
   const budget = d.clothes.reduce((sum, s) => sum + (s.budget ? s.budget.total : 0), 0);
 
   const firstRun = !d.family.children.length && !d.food.plan.length && !d.food.expiringSoon.length;
+  if (firstRun && !guideMode() && !state.demo?.on) setGuide('on');
+  const guide = await guideState();
   const signedOut = ACCOUNT && !ACCOUNT.status().signedIn && !state.demo?.on;
-  let nudge = signedOut && !firstRun;
+  let nudge = signedOut && !firstRun && !guide;
   try { nudge = nudge && !localStorage.getItem('fp-account-nudge'); } catch {}
   $('#page').innerHTML = `
-    ${firstRun ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Welcome! Let's set things up</h2></div>
-      ${signedOut ? `<p class="hint" style="margin-bottom:10px">Save your lists online and share them with your family: <button class="btn sm" data-account="signin">Sign in</button> <button class="btn sm" data-account="signup">Create account</button></p>` : ''}
-      <div class="chips">
-        <button class="chip" data-nav="family">${icon('people')} 1. Add your family</button>
-        <button class="chip" data-nav="food">${icon('food')} 2. Add what's in the cupboards</button>
-        <button class="chip" data-nav="clothes">${icon('shirt')} 3. Add the kids' clothes</button>
-        <button class="chip" data-nav="settings">${icon('sparkle')} 4. Pick an AI (optional)</button>
-        <button class="chip" data-nav="settings">${icon('edit')} 5. Make it yours: colours, tabs, kitchen screen</button>
-      </div></div>` : ''}
+    ${guide ? guideCard(guide) : ''}
+    ${guide && signedOut ? `<p class="hint" style="margin:-6px 0 16px">Save your lists online and share them with your family: <button class="btn sm" data-account="signin">Sign in</button> <button class="btn sm" data-account="signup">Create account</button></p>` : ''}
     ${nudge ? `<div class="banner" style="margin-bottom:16px;background:var(--accent-soft);color:var(--accent)"><span style="font-size:22px">☁️</span>
       <div class="grow">Save your data online and use it on all your devices.</div>
       <button class="btn sm primary" data-account="signup">Create account</button><button class="btn sm" data-account="signin">Sign in</button>
@@ -1451,6 +1506,18 @@ document.addEventListener('submit', guard(async (e) => {
   if (form.id === 'dialog-form') return;
   e.preventDefault();
   const body = formData(form);
+  if (form.id === 'feedback-form') {
+    if (!String(body.text || '').trim()) return toast('Write something first');
+    const btn = form.querySelector('button');
+    btn.disabled = true;
+    try {
+      await ACCOUNT.feedback(body.text, state.page);
+    } finally {
+      btn.disabled = false;
+    }
+    form.reset();
+    return toast('Thanks! Your feedback has been sent.');
+  }
   if (form.id === 'food-form') {
     await api('/food/items', { method: 'POST', body });
     toast(`Added ${body.name}`);
@@ -1744,6 +1811,20 @@ async function accountLeave() {
   loadHousehold();
 }
 
+// Only with an online account: the message is emailed to whoever runs the app.
+function feedbackCard() {
+  if (!ACCOUNT?.feedback || state.demo?.on) return '';
+  const signedIn = ACCOUNT.status().signedIn;
+  return `<div class="card" id="feedback-card">
+        <div class="card-head"><h2>💬 Send feedback</h2></div>
+        ${signedIn ? `<p class="hint">Something confusing, broken or missing? Tell us here. It's sent with your email so we can reply.</p>
+        <form id="feedback-form" style="margin-top:10px">
+          <textarea name="text" rows="3" maxlength="2000" placeholder="What would make the app better for your family?" style="width:100%"></textarea>
+          <button class="btn primary" style="margin-top:8px">${icon('check')} Send</button>
+        </form>` : '<p class="hint">Sign in (in Account above) to send feedback.</p>'}
+      </div>`;
+}
+
 async function accountDelete() {
   const shared = household?.shared;
   const done = await accountStep({
@@ -1917,6 +1998,7 @@ async function renderSettings() {
       ${customiseCard()}
       ${kitchenCard()}
       ${demoCard()}
+      ${feedbackCard()}
       <div class="card">
         <div class="card-head"><h2>💾 Backup</h2></div>
         <p class="hint">Download everything as a file, or restore from one. Restoring replaces what's here now.</p>
@@ -2447,6 +2529,11 @@ document.addEventListener('click', guard(async (e) => {
     if (!(await ask({ title: 'Restore this backup?', body: `<p class="muted">Made ${backup.exportedAt ? fmtDate(backup.exportedAt) : 'at an unknown date'}. It replaces everything here now.</p>`, ok: 'Restore', danger: true }))) return;
     await api('/import', { method: 'POST', body: backup });
     toast('Restored');
+    return refresh();
+  }
+  if (t.dataset.guide === 'skip') {
+    setGuide('skip');
+    toast('No problem. Add things whenever you like from each tab.');
     return refresh();
   }
   if (t.hasAttribute('data-account')) return accountAction(t.dataset.account);
