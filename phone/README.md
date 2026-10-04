@@ -44,6 +44,7 @@ mobile/                  the phone layer
   on-device.js           sends AI meal ideas and photo scans to Apple's on-device model
   ios-shims.js           iPhone fixes: barcode scanning, file export, Claude from the phone
   notifications.js       turns /api/v1/reminders into iPhone notifications
+  cloud.js               household account: sign-in and saving online (infra/cloud.yaml)
 plugins/on-device-ai/    the app's own Swift plugin: Apple Foundation Models + Vision
 ios/                     the Xcode project (Capacitor 8)
 scripts/build.mjs        builds www/ from ../web (or FAMILY_PLANNER_DIR)
@@ -64,6 +65,7 @@ The web app's code isn't copied by hand or changed. `npm run build` bundles it a
 npm run serve      # http://localhost:5173 in a desktop browser, at phone size in dev tools
 npm test           # unit tests for the phone layer
 npm run test:web   # checks the home screen build, including opening offline
+npm run test:account  # account sign-in and saving online, against a stand-in for AWS
 npm run test:e2e   # runs the built app in Chromium at iPhone size, with a stand-in for
                    # Apple's on-device AI and a mock extra AI (needs Playwright's Chromium)
 ```

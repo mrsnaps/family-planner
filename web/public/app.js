@@ -64,6 +64,12 @@ function ask({ title, body = '', ok = 'OK', danger = false }) {
       <button class="btn ${danger ? 'coral' : 'primary'}" value="ok">${esc(ok)}</button>
     </div>`;
   dlg.showModal();
+  $('#dialog-form').onkeydown = (e) => {
+    if (e.key === 'Enter' && e.target.matches('input:not([type=radio]):not([type=checkbox])')) {
+      e.preventDefault();
+      dlg.close('ok');
+    }
+  };
   return new Promise((resolve) => {
     dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok' ? formData($('#dialog-form')) : null), { once: true });
   });
@@ -309,14 +315,22 @@ async function renderHome() {
   const budget = d.clothes.reduce((sum, s) => sum + (s.budget ? s.budget.total : 0), 0);
 
   const firstRun = !d.family.children.length && !d.food.plan.length && !d.food.expiringSoon.length;
+  const signedOut = ACCOUNT && !ACCOUNT.status().signedIn;
+  let nudge = signedOut && !firstRun;
+  try { nudge = nudge && !localStorage.getItem('fp-account-nudge'); } catch {}
   $('#page').innerHTML = `
     ${firstRun ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Welcome! Let's set things up</h2></div>
+      ${signedOut ? `<p class="hint" style="margin-bottom:10px">Already set up on another device? <button class="btn sm" data-account="signin">Sign in</button></p>` : ''}
       <div class="chips">
         <button class="chip" data-nav="family">${icon('people')} 1. Add your family</button>
         <button class="chip" data-nav="food">${icon('food')} 2. Add what's in the cupboards</button>
         <button class="chip" data-nav="clothes">${icon('shirt')} 3. Add the kids' clothes</button>
         <button class="chip" data-nav="settings">${icon('sparkle')} 4. Pick an AI (optional)</button>
       </div></div>` : ''}
+    ${nudge ? `<div class="banner" style="margin-bottom:16px;background:var(--accent-soft);color:var(--accent)"><span style="font-size:22px">☁️</span>
+      <div class="grow">Save your data online and use it on all your devices.</div>
+      <button class="btn sm primary" data-account="signup">Create account</button><button class="btn sm" data-account="signin">Sign in</button>
+      <button class="btn ghost sm" data-account="dismiss" aria-label="Not now">${icon('x')}</button></div>` : ''}
     <div class="grid g4">
       <button class="card kpi tone-green" data-nav="food"><span class="ico">${icon('food')}</span><span class="num">${d.food.mealsLeft}${d.food.capped ? '+' : ''}</span><span class="lbl">meals left in stock</span></button>
       <button class="card kpi tone-warn" data-nav="food"><span class="ico">${icon('clock')}</span><span class="num">${d.food.expiringSoon.length}</span><span class="lbl">to use in 3 days</span></button>
@@ -1027,18 +1041,186 @@ new MutationObserver(() => {
 // ---------- settings ----------
 const IS_APP = Boolean(window.FamilyPlannerNative);
 
+// ---------- account (signing in and saving online) ----------
+// Only the home screen and iPhone versions provide window.FamilyPlannerAccount.
+const ACCOUNT = window.FamilyPlannerAccount || null;
+
+function accountCard() {
+  if (!ACCOUNT) return '';
+  const s = ACCOUNT.status();
+  const saved = s.savedAt ? `Last saved online ${new Date(s.savedAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.` : '';
+  return `
+    <div class="card" id="account-card" style="margin-bottom:16px">
+      <div class="card-head"><h2>☁️ Account</h2>${s.signedIn ? (s.error ? '<span class="pill warn">Not saved</span>' : s.syncing || s.pending ? '<span class="pill plain">Saving…</span>' : `<span class="pill">${icon('check')} Saved online</span>`) : '<span class="pill plain">Only on this device</span>'}</div>
+      ${s.signedIn ? `
+        <p style="margin-top:8px">Signed in as <strong>${esc(s.email)}</strong>. Changes save online by themselves, and show up on your other devices when you open the app there.</p>
+        <p class="hint" style="margin-top:6px">${s.error ? esc(s.error) + ' ' : ''}${esc(saved)} Your AI key stays on each device.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn" data-account="sync">${icon('upload')} Save now</button>
+          <button class="btn ghost" data-account="signout">Sign out</button>
+        </div>` : `
+        <p class="hint" style="margin-top:8px">Sign in to save your family's data online, so it's safe and the same on your iPhone and iPad. Use one account for the household and sign in with it on each device.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn primary" data-account="signin">Sign in</button>
+          <button class="btn" data-account="signup">Create account</button>
+        </div>`}
+    </div>`;
+}
+
+const field = (name, label, type = 'text', value = '', extra = '') =>
+  `<label class="field" style="margin-top:10px">${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
+const emailField = (v) => field('email', 'Email', 'email', v, 'autocomplete="username" autocapitalize="off" spellcheck="false"');
+const codeField = () => field('code', 'Code from the email', 'text', '', 'autocomplete="one-time-code" inputmode="numeric"');
+
+// Shows a form in the dialog until the step succeeds or the person cancels.
+async function accountStep({ title, intro = '', fields, ok, run }) {
+  let values = {};
+  let error = '';
+  for (;;) {
+    const body = `${intro ? `<p class="muted">${intro}</p>` : ''}${fields(values)}${error ? `<p class="small" style="color:var(--coral);margin-top:10px">${esc(error)}</p>` : ''}`;
+    const got = await ask({ title, body, ok });
+    if (!got) return null;
+    values = got;
+    try {
+      return (await run(got)) || got;
+    } catch (e) {
+      error = e.message;
+    }
+  }
+}
+
+async function accountSignIn(email = '') {
+  let choose = null;
+  const done = await accountStep({
+    title: 'Sign in',
+    fields: (v) => emailField(v.email || email) + field('password', 'Password', 'password', '', 'autocomplete="current-password"') +
+      '<p class="small" style="margin-top:10px"><button type="button" class="btn ghost sm" data-account="forgot">Forgot password?</button></p>',
+    ok: 'Sign in',
+    run: async (v) => {
+      if (!v.email || !v.password) throw new Error('Enter your email and password.');
+      const r = await ACCOUNT.signIn(v.email, v.password);
+      if (r.choose) choose = r;
+      return r;
+    },
+  });
+  if (!done) return;
+  if (choose) {
+    const keep = await ask({
+      title: 'Which data should this device use?',
+      body: `<p class="muted">Your account already has saved data${choose.savedAt ? ` from ${esc(fmtDate(choose.savedAt))}` : ''}, and this device has its own. Choose which to keep. The other is replaced.</p>
+        <label class="field" style="margin-top:12px"><span><input type="radio" name="keep" value="account" checked style="width:auto"> The account's saved data (recommended)</span></label>
+        <label class="field" style="margin-top:8px"><span><input type="radio" name="keep" value="device" style="width:auto"> This device's data</span></label>`,
+      ok: 'Continue',
+    });
+    await ACCOUNT.choose(keep?.keep === 'device' ? 'device' : 'account');
+  }
+  toast('Signed in. Your data is saved online.');
+  await refresh();
+}
+
+async function accountSignUp() {
+  const created = await accountStep({
+    title: 'Create an account',
+    intro: 'One account for the household. Use it to sign in on each of your devices.',
+    fields: (v) => emailField(v.email) + field('password', 'Password (8 or more characters, with a number)', 'password', '', 'autocomplete="new-password"'),
+    ok: 'Create account',
+    run: async (v) => {
+      if (!v.email || !v.password) throw new Error('Enter an email and a password.');
+      await ACCOUNT.signUp(v.email, v.password);
+    },
+  });
+  if (!created) return;
+  const confirmed = await accountStep({
+    title: 'Check your email',
+    intro: `We sent a code to ${esc(created.email)}. It can take a minute, and may land in junk mail.`,
+    fields: codeField,
+    ok: 'Confirm',
+    run: async (v) => {
+      await ACCOUNT.confirm(created.email, v.code);
+      await ACCOUNT.signIn(created.email, created.password);
+    },
+  });
+  if (!confirmed) return;
+  toast('Account created. Your data is saved online.');
+  await refresh();
+}
+
+async function accountForgot(email = '') {
+  const asked = await accountStep({
+    title: 'Reset your password',
+    intro: "We'll email you a code.",
+    fields: (v) => emailField(v.email || email),
+    ok: 'Send code',
+    run: (v) => ACCOUNT.forgotPassword(v.email),
+  });
+  if (!asked) return;
+  const reset = await accountStep({
+    title: 'Choose a new password',
+    intro: `Enter the code we sent to ${esc(asked.email)}.`,
+    fields: () => codeField() + field('password', 'New password', 'password', '', 'autocomplete="new-password"'),
+    ok: 'Save password',
+    run: async (v) => {
+      await ACCOUNT.resetPassword(asked.email, v.code, v.password);
+      await ACCOUNT.signIn(asked.email, v.password);
+    },
+  });
+  if (!reset) return;
+  toast('Password changed. You are signed in.');
+  await refresh();
+}
+
+async function accountAction(what) {
+  if (what === 'signin') return accountSignIn();
+  if (what === 'signup') return accountSignUp();
+  if (what === 'forgot') {
+    const email = $('#dialog-form input[name=email]')?.value || '';
+    const dlg = $('#dialog');
+    // Let the sign-in dialog finish closing before the next one opens in its place.
+    await new Promise((resolve) => { dlg.addEventListener('close', () => setTimeout(resolve), { once: true }); dlg.close('cancel'); });
+    return accountForgot(email);
+  }
+  if (what === 'dismiss') {
+    try { localStorage.setItem('fp-account-nudge', 'no'); } catch {}
+    return refresh();
+  }
+  if (what === 'sync') {
+    const s = await ACCOUNT.syncNow();
+    return toast(s.error || 'Saved online');
+  }
+  if (what === 'signout') {
+    if (!await ask({ title: 'Sign out?', body: '<p class="muted">Your data stays on this device, but changes here stop being saved online until you sign in again.</p>', ok: 'Sign out' })) return;
+    await ACCOUNT.signOut();
+    toast('Signed out');
+    return refresh();
+  }
+}
+
+if (ACCOUNT) {
+  window.addEventListener('familyplanner:account', () => {
+    const card = $('#account-card');
+    if (card) card.outerHTML = accountCard();
+  });
+  // Another device saved changes: show them.
+  window.addEventListener('familyplanner:datachanged', (e) => {
+    if ($('#dialog').open) return;
+    toast(e.detail?.reason === 'conflict' ? 'Your other device saved changes first, so this shows its latest data.' : 'Updated with changes from your other device');
+    refresh();
+  });
+}
+
 async function renderSettings() {
   const [ai, providers, prices] = await Promise.all([api('/ai/settings'), api('/ai/providers'), api('/clothes/prices')]);
   state.ai = ai;
   state.providers = providers;
   const f = state.family;
-  $('#page-sub').textContent = 'Diet, weather, AI and backups.';
+  $('#page-sub').textContent = ACCOUNT ? 'Account, diet, weather, AI and backups.' : 'Diet, weather, AI and backups.';
   const shownProviders = providers.filter((p) => p.id === ai.provider || !(IS_APP && ['ollama', 'custom'].includes(p.id)));
   const preset = providers.find((p) => p.id === ai.provider);
   const diets = ['vegetarian', 'dairy-free', 'gluten-free', 'nut-free'];
   const onDeviceOn = ai.onDeviceAvailable && ai.onDevice;
 
   $('#page').innerHTML = `
+    ${accountCard()}
     <div class="grid g2">
       <div class="card">
         <div class="card-head"><h2>🥗 Diet</h2></div>
@@ -1359,6 +1541,7 @@ document.addEventListener('click', guard(async (e) => {
     toast('Restored');
     return refresh();
   }
+  if (t.hasAttribute('data-account')) return accountAction(t.dataset.account);
   if (t.hasAttribute('data-copy-list') || t.hasAttribute('data-share-list')) {
     const { items } = await api('/shopping');
     const text = shoppingText(items);

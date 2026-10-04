@@ -13,7 +13,8 @@
     "test:e2e": "npm run build && node test/app.e2e.mjs",
     "build:web": "node scripts/build-web.mjs",
     "test:web": "npm run build:web && node test/web.e2e.mjs",
-    "zip:web": "node scripts/build-web.mjs --zip"
+    "zip:web": "node scripts/build-web.mjs --zip",
+    "test:account": "npm run build && node test/account.e2e.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.2",

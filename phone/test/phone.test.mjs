@@ -40,3 +40,15 @@ test('local API passes method, query and body to the handler', async () => {
   assert.deepEqual(await res.json(), { ok: true });
   assert.deepEqual(seen, { method: 'POST', url: '/api/v1/x?y=1', body: '{"a":1}' });
 });
+
+test('account sync never uploads the AI key and keeps each device its own', async () => {
+  const { shareable, merged, hasContent } = await import('../mobile/cloud.js');
+  const local = { family: { children: [] }, ai: { provider: 'anthropic', apiKey: 'sk-1', usage: { month: '2026-10', count: 3 } } };
+  assert.deepEqual(shareable(local).ai, { provider: 'anthropic' });
+  assert.equal(local.ai.apiKey, 'sk-1', 'the original is untouched');
+  const remote = { family: { children: [{ name: 'Sam' }] }, ai: { provider: 'openai', model: 'x' } };
+  assert.deepEqual(merged(remote, local).ai, { provider: 'openai', model: 'x', apiKey: 'sk-1', usage: { month: '2026-10', count: 3 } });
+  assert.deepEqual(merged({ food: {} }, {}), { food: {} });
+  assert.equal(hasContent(local), false);
+  assert.equal(hasContent(remote), true);
+});

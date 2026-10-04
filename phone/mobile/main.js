@@ -8,6 +8,8 @@ import { withOnDevice } from './on-device.js';
 import { wrapNetwork, installBarcodeDetector, installDownloads } from './ios-shims.js';
 import { scheduleFromReminders } from './notifications.js';
 import { isNative } from './native.js';
+import { createAccount } from './cloud.js';
+import CLOUD from './cloud-config.js';
 
 async function start() {
   // Tells the web UI it's inside the iPhone app (the home screen version is plain web).
@@ -20,10 +22,22 @@ async function start() {
     clearTimeout(timer);
     timer = setTimeout(() => scheduleFromReminders(localFetch).catch(() => {}), 3000);
   };
+  // Household account: when signed in, pick up the latest saved copy before the UI starts
+  // (but don't keep the app waiting when offline), and save each change online.
+  const account = (globalThis.__fpCloudConfig || CLOUD).clientId ? createAccount(store) : null;
+  if (account) {
+    await account.restore();
+    if (account.status().signedIn) await Promise.race([account.syncNow(), new Promise((r) => setTimeout(r, 4000))]);
+    window.FamilyPlannerAccount = account;
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && account.syncNow());
+    window.addEventListener('online', () => account.syncNow());
+  }
   setPersist((data) => {
     saveData(data);
+    account?.noteChange();
     reschedule();
   });
+  window.addEventListener('familyplanner:datachanged', () => reschedule());
 
   const original = installFetch(withOnDevice(localFetch));
   // Requests to the internet (AI, Open Food Facts) go through the fixes in ios-shims.

@@ -27,9 +27,15 @@ Nothing to do. When a change is pushed to `main`, Amplify rebuilds and publishes
 
 Amplify Hosting is free for the first 12 months (1,000 build minutes, 15 GB served and 5 GB stored a month). After that it's $0.01 per build minute, $0.15 per GB served and $0.023 per GB stored. A build takes about a minute and the app is about 0.2 MB, so a family's use comes to pennies a month. A custom domain costs extra, about £10 a year. Setting an AWS budget alert (Billing > Budgets) is a good safety net.
 
-## What it doesn't do (yet)
+## Accounts and saving online
 
-- **No sharing between devices.** The iPhone and iPad each keep their own data. To copy it across, use **Settings > Download backup** and **Restore from file**.
-- No Apple built-in AI and no phone notifications. Those need the native iPhone app ([phone/](../phone/)).
+In the app, **Settings > Account** lets the household create one account (email and password, confirmed with a code by email) and sign in with it on each iPhone, iPad or computer. Every change is then saved online by itself, and the other devices pick it up when they're next opened. If two devices change things at the same moment, the first to save wins and the other device says so. Each device keeps its own AI key, which is never uploaded. Signing out keeps the data on that device but stops saving it online.
 
-Sharing one household across devices and people would need logins and a database. Amplify can add both (Amplify Auth and Amplify Data), and that's the "go multi-user" step in [the running-costs write-up](ideas-and-running-costs.md).
+Behind it is the CloudFormation stack `family-planner-cloud` in London ([`infra/cloud.yaml`](../infra/cloud.yaml)):
+- **Amazon Cognito** for sign-in (Lite tier, free up to 10,000 people a month). Codes come from Cognito's own email address, which is limited to 50 emails a day.
+- **S3** holds one private file per household. Old copies are kept for 30 days, so a bad change can be undone from the AWS console.
+- **API Gateway and a small Lambda function** read and save that file, only for the signed-in household.
+
+For one family this costs nothing within the free tiers, and pennies a month after them. The app's address and IDs are in [`phone/mobile/cloud-config.js`](../phone/mobile/cloud-config.js). If the app moves to a new address, update the stack's `AppOrigin` parameter so the new address is allowed to save.
+
+Not done yet: separate logins for each family member (everyone shares the household login), and merging two devices' changes made at the same moment.

@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Family Planner accounts and online saving. Cognito sign-in, one JSON file per household in S3, behind a small HTTP API.
+
+Parameters:
+  AppOrigin:
+    Type: String
+    Default: https://main.d3ofenwxb2m5fu.amplifyapp.com
+    Description: Address of the hosted app, allowed to call the API.
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: family-planner
+      UserPoolTier: LITE
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AccountRecoverySetting:
+        RecoveryMechanisms: [{ Name: verified_email, Priority: 1 }]
+      Policies:
+        PasswordPolicy: { MinimumLength: 8, RequireLowercase: false, RequireUppercase: false, RequireNumbers: true, RequireSymbols: false }
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: Your Family Planner code
+        EmailMessage: 'Your Family Planner code is {####}'
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: family-planner-app
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      IdTokenValidity: 1
+      AccessTokenValidity: 1
+      RefreshTokenValidity: 365
+      TokenValidityUnits: { IdToken: hours, AccessToken: hours, RefreshToken: days }
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      LifecycleConfiguration:
+        Rules: [{ Id: old-versions, Status: Enabled, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }]
+
+  DataFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{ Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: household-data
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject], Resource: !Sub '${DataBucket.Arn}/households/*' }
+              # Lets a missing file read as "not found" instead of "access denied".
+              - { Effect: Allow, Action: s3:ListBucket, Resource: !GetAtt DataBucket.Arn }
+
+  DataFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs22.x
+      Handler: index.handler
+      MemorySize: 256
+      Timeout: 10
+      Role: !GetAtt DataFunctionRole.Arn
+      Environment:
+        Variables:
+          BUCKET: !Ref DataBucket
+          # API Gateway's own CORS settings reject the iPhone app's capacitor:// origin, so CORS is answered here.
+          ORIGINS: !Sub '${AppOrigin} capacitor://localhost http://localhost:5173 http://localhost:5175'
+      Code:
+        ZipFile: |
+          // GET /data returns the household's saved data; PUT /data saves it, but only if
+          // nobody else saved since this device last read it (baseRev), so no change is lost silently.
+          const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
+          const s3 = new S3Client({});
+          const Bucket = process.env.BUCKET;
+          const MAX = 5 * 1024 * 1024;
+          const ORIGINS = process.env.ORIGINS.split(' ');
+          let cors = {};
+          const reply = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json', ...cors }, body: JSON.stringify(body) });
+          async function read(Key) {
+            try {
+              const o = await s3.send(new GetObjectCommand({ Bucket, Key }));
+              return { data: JSON.parse(await o.Body.transformToString()), rev: o.ETag, savedAt: o.LastModified };
+            } catch (e) {
+              if (e.name === 'NoSuchKey') return { data: null, rev: null };
+              throw e;
+            }
+          }
+          exports.handler = async (event) => {
+            const origin = event.headers && event.headers.origin;
+            cors = ORIGINS.includes(origin) ? { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': 'GET,PUT', 'access-control-max-age': '3600', vary: 'origin' } : {};
+            if (event.requestContext.http.method === 'OPTIONS') return { statusCode: 204, headers: cors };
+            const Key = `households/${event.requestContext.authorizer.jwt.claims.sub}.json`;
+            if (event.requestContext.http.method === 'GET') return reply(200, await read(Key));
+            const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString() : event.body || '';
+            if (raw.length > MAX) return reply(413, { error: 'Too much data to save' });
+            let body;
+            try { body = JSON.parse(raw); } catch { return reply(400, { error: 'Not JSON' }); }
+            if (!body || !body.data || typeof body.data !== 'object' || Array.isArray(body.data)) return reply(400, { error: 'Nothing to save' });
+            const condition = body.baseRev ? { IfMatch: body.baseRev } : { IfNoneMatch: '*' };
+            try {
+              const o = await s3.send(new PutObjectCommand({ Bucket, Key, Body: JSON.stringify(body.data), ContentType: 'application/json', ...condition }));
+              return reply(200, { rev: o.ETag });
+            } catch (e) {
+              const status = e.$metadata && e.$metadata.httpStatusCode;
+              if (status === 412 || status === 409) return reply(409, { error: 'Changed on another device', ...(await read(Key)) });
+              throw e;
+            }
+          };
+
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: family-planner
+      ProtocolType: HTTP
+
+  ApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref Api
+      Name: cognito
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Audience: [!Ref UserPoolClient]
+        Issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt DataFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  GetRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: GET /data
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ApiAuthorizer
+      Target: !Sub integrations/${ApiIntegration}
+
+  PutRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: PUT /data
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ApiAuthorizer
+      Target: !Sub integrations/${ApiIntegration}
+
+  # Browsers ask before sending a sign-in token; that check carries no token.
+  OptionsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: OPTIONS /data
+      AuthorizationType: NONE
+      Target: !Sub integrations/${ApiIntegration}
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref Api
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings: { ThrottlingBurstLimit: 20, ThrottlingRateLimit: 10 }
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DataFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*
+
+Outputs:
+  Region: { Value: !Ref AWS::Region }
+  UserPoolClientId: { Value: !Ref UserPoolClient }
+  ApiUrl: { Value: !GetAtt Api.ApiEndpoint }
