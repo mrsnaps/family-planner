@@ -48,7 +48,7 @@ async function buildSample(createApp, now = new Date()) {
   const yearsAgo = (y, m = 0) => new Date(Date.UTC(now.getUTCFullYear() - y, now.getUTCMonth() - m, 14)).toISOString().slice(0, 10);
 
   // The family: two grown-ups and three children.
-  await call('PUT', '/api/v1/family', { adults: 2, dietary: [], location: { name: 'Bristol', lat: 51.4545, lon: -2.5879 } });
+  await call('PUT', '/api/v1/family', { name: 'The Parkers', adults: 2, dietary: [], location: { name: 'Bristol', lat: 51.4545, lon: -2.5879 } });
   const mia = await call('POST', '/api/v1/family/children', { name: 'Mia', birthDate: yearsAgo(9, 4), clothingSize: '9-10Y', shoeSize: '2' });
   const leo = await call('POST', '/api/v1/family/children', { name: 'Leo', birthDate: yearsAgo(6, 7), clothingSize: '6-7Y', shoeSize: '12' });
   const ruby = await call('POST', '/api/v1/family/children', { name: 'Ruby', birthDate: yearsAgo(2, 2), clothingSize: '2-3Y', shoeSize: '6' });

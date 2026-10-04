@@ -82,6 +82,7 @@ function register(router, store) {
       if (!Number.isInteger(n) || n < 0 || n > 20) throw new HttpError(400, 'adults must be 0-20');
       f.adults = n;
     }
+    if (body.name !== undefined) f.name = text(body.name, 40) || null; // the household's name, e.g. "The Parkers"
     if (body.dietary !== undefined) {
       if (!Array.isArray(body.dietary) || body.dietary.some((d) => !DIETS.includes(d))) {
         throw new HttpError(400, `dietary must be a list from: ${DIETS.join(', ')}`);

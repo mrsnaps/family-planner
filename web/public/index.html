@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <!-- Only this app's own scripts run (the theme script below is allowed by its hash: update
        the hash if you change it). Stops text from shared or imported data running as code. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-5hGMShl/PddxhZ7jMuNohLVfsCwgKiMtvnugwj6UHr8='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https: http:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-QKR+ADRlcgkmpEDrFvEudzHlcaJGyR9y/geVOEBf058='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https: http:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="theme-color" content="#2e6b57">
   <title>Family Planner</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,8 +15,14 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <script>
-    // Apply the saved theme before first paint so there's no flash.
-    try { const t = localStorage.getItem('fp-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+    // Apply the saved theme, colour and text size before first paint so there's no flash.
+    try {
+      const r = document.documentElement;
+      const t = localStorage.getItem('fp-theme'); if (t) r.dataset.theme = t;
+      const l = JSON.parse(localStorage.getItem('fp-look') || '{}') || {};
+      if (l.accent) r.dataset.accent = l.accent;
+      if (l.size) r.dataset.size = l.size;
+    } catch {}
   </script>
 </head>
 <body>

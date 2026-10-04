@@ -170,7 +170,35 @@ const PAGES = [
   { id: 'chores', label: 'Chores', icon: 'broom', title: 'Chores', render: renderChores },
   { id: 'family', label: 'Family', icon: 'people', title: 'Family', render: renderFamily },
   { id: 'settings', label: 'Settings', icon: 'gear', title: 'Settings', render: renderSettings },
+  { id: 'kitchen', label: 'Kitchen', icon: 'home', title: 'Kitchen screen', render: renderKitchen, hidden: true },
 ];
+// Tools that can be hidden in Settings > Customise (Home, Family and Settings always show).
+const TOOLS = ['food', 'clothes', 'shopping', 'chores'];
+
+// ---------- look and layout (each device chooses its own) ----------
+const LOOK_DEFAULT = {
+  accent: 'green', size: 'normal', hidden: [], start: 'home',
+  kitchen: { panels: ['dinner', 'chores', 'shopping', 'food', 'outfits', 'reminders'], awake: true, dim: true },
+};
+const ACCENTS = [['green', 'Green', '#2e6b57'], ['blue', 'Blue', '#2f5fa8'], ['purple', 'Purple', '#6a4bb0'], ['orange', 'Orange', '#b65a1e'], ['pink', 'Pink', '#b03a72'], ['teal', 'Teal', '#1f7a85'], ['slate', 'Slate', '#4a5568']];
+const KITCHEN_PANELS = [['dinner', "Tonight's dinner"], ['chores', "Today's chores"], ['shopping', 'Shopping list'], ['food', 'Food to use soon'], ['outfits', 'Outfits for today'], ['reminders', 'Reminders'], ['week', "The week's dinners"]];
+const look = (() => {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem('fp-look') || '{}') || {}; } catch {}
+  return { ...structuredClone(LOOK_DEFAULT), ...v, kitchen: { ...LOOK_DEFAULT.kitchen, ...(v.kitchen || {}) } };
+})();
+function applyLook() {
+  const r = document.documentElement;
+  r.dataset.accent = look.accent;
+  r.dataset.size = look.size;
+  r.dataset.hide = look.hidden.join(' ');
+}
+function saveLook() {
+  try { localStorage.setItem('fp-look', JSON.stringify(look)); } catch {}
+  applyLook();
+}
+applyLook();
+const shownPages = () => PAGES.filter((p) => !p.hidden && !look.hidden.includes(p.id));
 
 function renderNav() {
   const btn = (p, mobile) => `
@@ -178,8 +206,10 @@ function renderNav() {
       ${icon(p.icon)}<span>${p.label}</span>
       ${p.id === 'shopping' && state.shoppingCount ? `<span class="count">${state.shoppingCount}</span>` : ''}
     </button>`;
-  $('#nav').innerHTML = PAGES.map((p) => btn(p)).join('');
-  $('#tabbar').innerHTML = PAGES.map((p) => btn(p, true)).join('');
+  const pages = shownPages();
+  $('#nav').innerHTML = pages.map((p) => btn(p)).join('');
+  $('#tabbar').innerHTML = pages.map((p) => btn(p, true)).join('');
+  $('#tabbar').style.gridTemplateColumns = `repeat(${pages.length}, minmax(0, 1fr))`;
   const dark = currentTheme() === 'dark';
   $('#theme-btn').innerHTML = `${icon(dark ? 'sun' : 'moon')}<span>${dark ? 'Light mode' : 'Dark mode'}</span>`;
 }
@@ -198,6 +228,8 @@ $('#theme-btn').addEventListener('click', () => {
 
 function go(page) {
   state.page = PAGES.some((p) => p.id === page) ? page : 'home';
+  document.body.classList.toggle('kitchen-mode', state.page === 'kitchen');
+  if (state.page !== 'kitchen') kitchenOff();
   history.replaceState(null, '', '#' + state.page);
   window.scrollTo(0, 0);
   refresh();
@@ -208,6 +240,7 @@ async function refresh() {
   state.family = family;
   state.demo = demo;
   demoBanner();
+  $('.brand-name').textContent = family.name || 'Family Planner';
   if (!state.family.children.some((c) => c.id === state.childId)) state.childId = state.family.children[0]?.id || null;
   const page = PAGES.find((p) => p.id === state.page);
   $('#page-title').textContent = page.title;
@@ -215,9 +248,11 @@ async function refresh() {
   $('#page-actions').innerHTML = '';
   $('#brand-sub').textContent = `${plural(state.family.people, 'person', 'people')} at home`;
   await guard(page.render)();
-  $('#page').classList.remove('fade-in');
-  void $('#page').offsetWidth;
-  $('#page').classList.add('fade-in');
+  if (page.id !== 'kitchen') {
+    $('#page').classList.remove('fade-in');
+    void $('#page').offsetWidth;
+    $('#page').classList.add('fade-in');
+  }
   renderNav();
 }
 
@@ -349,21 +384,22 @@ async function renderHome() {
         <button class="chip" data-nav="food">${icon('food')} 2. Add what's in the cupboards</button>
         <button class="chip" data-nav="clothes">${icon('shirt')} 3. Add the kids' clothes</button>
         <button class="chip" data-nav="settings">${icon('sparkle')} 4. Pick an AI (optional)</button>
+        <button class="chip" data-nav="settings">${icon('edit')} 5. Make it yours: colours, tabs, kitchen screen</button>
       </div></div>` : ''}
     ${nudge ? `<div class="banner" style="margin-bottom:16px;background:var(--accent-soft);color:var(--accent)"><span style="font-size:22px">☁️</span>
       <div class="grow">Save your data online and use it on all your devices.</div>
       <button class="btn sm primary" data-account="signup">Create account</button><button class="btn sm" data-account="signin">Sign in</button>
       <button class="btn ghost sm" data-account="dismiss" aria-label="Not now">${icon('x')}</button></div>` : ''}
     <div class="grid g4">
-      <button class="card kpi tone-green" data-nav="food"><span class="ico">${icon('food')}</span><span class="num">${d.food.mealsLeft}${d.food.capped ? '+' : ''}</span><span class="lbl">meals left in stock</span></button>
-      <button class="card kpi tone-warn" data-nav="food"><span class="ico">${icon('clock')}</span><span class="num">${d.food.expiringSoon.length}</span><span class="lbl">to use in 3 days</span></button>
-      <button class="card kpi tone-coral" data-nav="clothes"><span class="ico">${icon('shirt')}</span><span class="num">${budget ? money(budget) : kidsNeeding}</span><span class="lbl">${budget ? 'kids\' clothes budget ahead' : (kidsNeeding === 1 ? 'child needs' : 'children need') + ' clothes'}</span></button>
-      <button class="card kpi tone-blue" data-nav="shopping"><span class="ico">${icon('cart')}</span><span class="num">${d.shoppingCount}</span><span class="lbl">on the shopping list</span></button>
+      <button class="card kpi tone-green" data-nav="food" data-tool="food"><span class="ico">${icon('food')}</span><span class="num">${d.food.mealsLeft}${d.food.capped ? '+' : ''}</span><span class="lbl">meals left in stock</span></button>
+      <button class="card kpi tone-warn" data-nav="food" data-tool="food"><span class="ico">${icon('clock')}</span><span class="num">${d.food.expiringSoon.length}</span><span class="lbl">to use in 3 days</span></button>
+      <button class="card kpi tone-coral" data-nav="clothes" data-tool="clothes"><span class="ico">${icon('shirt')}</span><span class="num">${budget ? money(budget) : kidsNeeding}</span><span class="lbl">${budget ? 'kids\' clothes budget ahead' : (kidsNeeding === 1 ? 'child needs' : 'children need') + ' clothes'}</span></button>
+      <button class="card kpi tone-blue" data-nav="shopping" data-tool="shopping"><span class="ico">${icon('cart')}</span><span class="num">${d.shoppingCount}</span><span class="lbl">on the shopping list</span></button>
     </div>
 
     ${d.reminders.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>🔔 Reminders</h2><span class="muted small">${plural(d.reminders.length, 'thing')} to know</span></div>${reminderList(d.reminders)}</div>` : ''}
 
-    <div class="card" style="margin-top:16px">
+    <div class="card" style="margin-top:16px" data-tool="food">
       <div class="card-head"><h2>This week's dinners</h2><span class="muted small" id="week-by">Planned from what's in, using food that goes off first</span></div>
       <div id="week-strip">${weekStrip(d.food.plan)}</div>
       <p style="margin-top:12px"><button class="btn" data-week-shop>${icon('cart')} Shop for the week</button> <span class="hint">Fills the gaps and adds what all 7 dinners need</span></p>
@@ -372,15 +408,15 @@ async function renderHome() {
         `<span class="pill ${e.days < 0 ? 'bad' : 'warn'}">${foodCat(e.name).emoji} ${esc(e.name)} · ${e.days < 0 ? 'out of date' : e.days === 0 ? 'today' : 'in ' + plural(e.days, 'day')}</span>`).join('')}</div>` : ''}
     </div>
 
-    ${d.handMeDowns.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>♻️ Hand-me-downs</h2>${passAllButtons(d.handMeDowns) || '<span class="muted small">Outgrown clothes a sibling can use</span>'}</div>
+    ${d.handMeDowns.length ? `<div class="card" style="margin-top:16px" data-tool="clothes"><div class="card-head"><h2>♻️ Hand-me-downs</h2>${passAllButtons(d.handMeDowns) || '<span class="muted small">Outgrown clothes a sibling can use</span>'}</div>
       <ul class="list">${d.handMeDowns.slice(0, 5).map((h) => `<li class="row"><span class="emoji">${GARMENT[h.type] || '👕'}</span>
         <div class="grow"><div class="title">${esc(h.name)} <span class="pill plain">${esc(h.size)}</span></div><div class="sub">${esc(h.fromName)} → ${esc(h.toName)} · ${h.fitsNow ? 'fits now' : 'to grow into'}</div></div>
         <button class="btn sm" data-handdown="${esc(h.itemId)}" data-to="${esc(h.toChildId)}">Pass to ${esc(h.toName)}</button></li>`).join('')}</ul></div>` : ''}
 
     ${choresHomeCard(d.chores)}
 
-    <div class="card-head" style="margin:26px 0 12px"><h2>Kids' clothes</h2><button class="btn sm" data-nav="clothes">Open wardrobes</button></div>
-    ${d.clothes.length ? `<div class="grid g2">${d.clothes.map((s, i) => kidCard(s, i)).join('')}</div>`
+    <div class="card-head" style="margin:26px 0 12px" data-tool="clothes"><h2>Kids' clothes</h2><button class="btn sm" data-nav="clothes">Open wardrobes</button></div>
+    ${d.clothes.length ? `<div class="grid g2" data-tool="clothes">${d.clothes.map((s, i) => kidCard(s, i)).join('')}</div>`
       : `<div class="card">${emptyState('👶', 'No children added yet.', '<button class="btn primary" data-nav="family">Add a child</button>')}</div>`}
   `;
   if (state.ai.suggestions) aiWeek(d.food.plan);
@@ -974,7 +1010,7 @@ const dayName = (date, today) => {
 
 function choresHomeCard(c) {
   if (!c || (!c.todayList.length && !c.doneToday)) return '';
-  return `<div class="card" style="margin-top:16px" id="chores-home">
+  return `<div class="card" style="margin-top:16px" id="chores-home" data-tool="chores">
     <div class="card-head"><h2>🧹 Today's chores</h2><button class="btn sm" data-nav="chores">All chores</button></div>
     ${c.todayList.length ? `<ul class="list">${c.todayList.slice(0, 6).map((it) => choreRow(it)).join('')}</ul>${c.todayList.length > 6 ? `<p class="hint">+${c.todayList.length - 6} more on the Chores page</p>` : ''}`
       : `<p class="hint">All done for today. ${c.doneToday} chore${c.doneToday === 1 ? '' : 's'} ticked off.</p>`}
@@ -1846,6 +1882,8 @@ async function renderSettings() {
           <button class="btn primary" style="margin-top:12px">Save prices</button>
         </form>
       </div>
+      ${customiseCard()}
+      ${kitchenCard()}
       ${demoCard()}
       <div class="card">
         <div class="card-head"><h2>💾 Backup</h2></div>
@@ -1859,6 +1897,220 @@ async function renderSettings() {
     <p class="muted small" id="about-line" style="text-align:center;margin:24px 0 8px;user-select:none">Family Planner</p>`;
   if (!household) loadHousehold();
 }
+
+// ---------- customise ----------
+// The household's name is shared; colours, text size, tabs and the kitchen screen are set
+// on each device, so the kitchen tablet can look different from a phone.
+function customiseCard() {
+  const f = state.family;
+  const theme = document.documentElement.dataset.theme || 'auto';
+  const seg = (name, value, opts) => `<div class="seg" role="group">${opts.map(([v, l]) =>
+    `<button type="button" data-look-${name}="${v}" class="${value === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  return `
+      <div class="card" id="customise-card">
+        <div class="card-head"><h2>🎨 Customise</h2></div>
+        <form id="household-name-form" class="stack" style="margin-top:4px">
+          <label class="field">Household name <span class="muted small">(everyone sees this)</span>
+            <span style="display:flex;gap:8px"><input name="name" maxlength="40" value="${esc(f.name || '')}" placeholder="e.g. The Schofields"><button class="btn">Save</button></span></label>
+        </form>
+        <div class="field" style="margin-top:14px">Colour
+          <div class="swatches">${ACCENTS.map(([id, label, hex]) =>
+    `<button type="button" class="swatch ${look.accent === id ? 'active' : ''}" data-look-accent="${id}" style="background:${hex}" aria-label="${label}" title="${label}">${look.accent === id ? icon('check') : ''}</button>`).join('')}</div></div>
+        <div class="field" style="margin-top:14px">Light or dark ${seg('theme', theme, [['auto', 'Match the device'], ['light', 'Light'], ['dark', 'Dark']])}</div>
+        <div class="field" style="margin-top:14px">Text size ${seg('size', look.size, [['normal', 'Normal'], ['large', 'Large'], ['xl', 'Extra large']])}</div>
+        <div class="field" style="margin-top:14px">Tabs to show
+          <div class="chips" style="margin-top:6px">${TOOLS.map((t) => {
+    const pg = PAGES.find((p) => p.id === t);
+    return `<label class="chip check-chip"><input type="checkbox" data-look-tab="${t}" ${look.hidden.includes(t) ? '' : 'checked'}> ${pg.label === 'Shop' ? 'Shopping' : pg.label}</label>`;
+  }).join('')}</div>
+          <span class="hint">Hidden tools also leave the Home page. Nothing is deleted.</span></div>
+        <label class="field" style="margin-top:14px">Open the app on
+          <select data-look-start>${PAGES.filter((p) => p.id !== 'settings').map((p) =>
+    `<option value="${p.id}" ${look.start === p.id ? 'selected' : ''}>${p.id === 'kitchen' ? 'Kitchen screen' : p.title}</option>`).join('')}</select></label>
+      </div>`;
+}
+
+function kitchenCard() {
+  const k = look.kitchen;
+  return `
+      <div class="card" id="kitchen-card">
+        <div class="card-head"><h2>📺 Kitchen screen</h2></div>
+        <p class="hint">A big, glanceable page for a tablet or screen on the wall: the time, weather, tonight's dinner, today's chores and the shopping list. It updates by itself, and chores and shopping can be ticked off from it.</p>
+        <div class="field" style="margin-top:12px">Show
+          <div class="chips" style="margin-top:6px">${KITCHEN_PANELS.map(([id, label]) =>
+    `<label class="chip check-chip"><input type="checkbox" data-look-panel="${id}" ${k.panels.includes(id) ? 'checked' : ''}> ${label}</label>`).join('')}</div></div>
+        <label class="check-row" style="margin-top:10px"><input type="checkbox" data-look-awake ${k.awake ? 'checked' : ''}> Keep the screen on while it's showing</label>
+        <label class="check-row"><input type="checkbox" data-look-dim ${k.dim ? 'checked' : ''}> Dim it at night (10pm to 6am)</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn primary" data-nav="kitchen">${icon('home')} Open kitchen screen</button>
+        </div>
+        <p class="hint" style="margin-top:8px">For a tablet that's always the kitchen screen, set <strong>Open the app on</strong> to Kitchen screen in Customise on that tablet, then add the app to its home screen.</p>
+      </div>`;
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-look-accent],[data-look-theme],[data-look-size]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.lookAccent) look.accent = d.lookAccent;
+  if (d.lookSize) look.size = d.lookSize;
+  if (d.lookTheme) {
+    if (d.lookTheme === 'auto') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = d.lookTheme;
+    try {
+      if (d.lookTheme === 'auto') localStorage.removeItem('fp-theme');
+      else localStorage.setItem('fp-theme', d.lookTheme);
+    } catch {}
+  }
+  saveLook();
+  renderNav();
+  // Show the choice in place (re-drawing the page would lose anything half-typed).
+  const attr = Object.keys(d).find((k) => k.startsWith('look'));
+  const name = 'data-' + attr.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+  for (const b of document.querySelectorAll(`[${name}]`)) {
+    b.classList.toggle('active', b === t);
+    if (b.classList.contains('swatch')) b.innerHTML = b === t ? icon('check') : '';
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  const d = t.dataset || {};
+  if (d.lookTab) {
+    look.hidden = t.checked ? look.hidden.filter((x) => x !== d.lookTab) : [...new Set([...look.hidden, d.lookTab])];
+    if (look.hidden.includes(look.start)) {
+      look.start = 'home';
+      if ($('[data-look-start]')) $('[data-look-start]').value = 'home';
+    }
+  } else if (d.lookStart !== undefined) look.start = t.value;
+  else if (d.lookPanel) {
+    const on = new Set(look.kitchen.panels);
+    if (t.checked) on.add(d.lookPanel); else on.delete(d.lookPanel);
+    look.kitchen.panels = KITCHEN_PANELS.map(([id]) => id).filter((id) => on.has(id));
+  } else if (d.lookAwake !== undefined) look.kitchen.awake = t.checked;
+  else if (d.lookDim !== undefined) look.kitchen.dim = t.checked;
+  else return;
+  saveLook();
+  renderNav();
+});
+
+document.addEventListener('submit', guard(async (e) => {
+  if (e.target.id !== 'household-name-form') return;
+  e.preventDefault();
+  const { name } = formData(e.target);
+  state.family = await api('/family', { method: 'PUT', body: { name: name || '' } });
+  $('.brand-name').textContent = state.family.name || 'Family Planner';
+  toast(state.family.name ? `Saved: ${state.family.name}` : 'Name cleared');
+}));
+
+// ---------- kitchen screen ----------
+// Full screen, big text, no tabs. Refreshes itself every minute (and straight away when
+// someone else changes something); a tap ticks off a chore or a shopping item.
+const kitchen = { wake: null, timer: null, clock: null };
+
+async function renderKitchen() {
+  state.ai = await api('/ai/settings');
+  const k = look.kitchen;
+  const want = (id) => k.panels.includes(id);
+  const [d, shop, weather] = await Promise.all([api('/dashboard'), want('shopping') ? api('/shopping') : null, todaysWeather()]);
+  state.shoppingCount = d.shoppingCount;
+  const kids = d.family.children;
+  const wq = weather && weather.tempC !== null ? `?tempC=${weather.tempC}&rain=${weather.rain ? 1 : 0}` : '';
+  const outfits = want('outfits') && !look.hidden.includes('clothes')
+    ? await Promise.all(kids.map((c) => api(`/clothes/outfit-of-the-day/${encodeURIComponent(c.id)}${wq}`).catch(() => null)))
+    : [];
+  const off = (tool) => look.hidden.includes(tool);
+  const panel = (id, title, body, extra = '') => `<section class="card k-panel" id="k-${id}"><div class="card-head"><h2>${title}</h2>${extra}</div>${body}</section>`;
+  const tonight = d.food.plan[0];
+  const panels = {
+    dinner: () => off('food') ? '' : panel('dinner', "🍽️ Tonight's dinner", tonight
+      ? `<div class="k-dinner"><span class="k-dinner-emoji">${MEAL_EMOJI(tonight.name)}</span><div><div class="k-big" id="k-dinner-name">${esc(tonight.name)}</div>
+          <div class="muted">${[d.food.plan[1] && `Tomorrow: ${esc(d.food.plan[1].name)}`, d.food.plan[2] && `then ${esc(d.food.plan[2].name)}`].filter(Boolean).join(' · ')}</div></div></div>`
+      : '<p class="k-empty">Nothing planned: something needs buying first.</p>'),
+    chores: () => off('chores') ? '' : panel('chores', "🧹 Today's chores", d.chores.todayList.length
+      ? `<ul class="list">${d.chores.todayList.slice(0, 8).map(choreRow).join('')}</ul>${d.chores.todayList.length > 8 ? `<p class="hint">+${d.chores.todayList.length - 8} more</p>` : ''}`
+      : `<p class="k-empty">🎉 All done for today${d.chores.doneToday ? ` (${plural(d.chores.doneToday, 'chore')})` : ''}.</p>`,
+      d.chores.totals?.some((t) => t.points) ? `<span class="muted small">${d.chores.totals.filter((t) => t.points).sort((a, b) => b.points - a.points).slice(0, 3).map((t) => `${esc(t.name)} ${esc(t.points)}`).join(' · ')} pts</span>` : ''),
+    shopping: () => off('shopping') || !shop ? '' : (() => {
+      const open = shop.items.filter((i) => !i.done);
+      return panel('shopping', '🛒 Shopping list', open.length
+        ? `<ul class="list k-shop">${open.slice(0, 12).map((it) => `<li class="row"><button class="check" data-toggle="${esc(it.id)}" data-state="false" aria-label="Tick ${esc(it.name)}">${icon('check')}</button>
+            <div class="grow title">${it.quantity ? esc(it.quantity) + ' × ' : ''}${esc(cap(it.name))}${it.size ? ` <span class="pill plain">${esc(it.size)}</span>` : ''}</div></li>`).join('')}</ul>${open.length > 12 ? `<p class="hint">+${open.length - 12} more</p>` : ''}`
+        : '<p class="k-empty">Nothing on the list.</p>', `<span class="muted small">${plural(open.length, 'thing')}</span>`);
+    })(),
+    food: () => off('food') || !d.food.expiringSoon.length ? '' : panel('food', '⏰ Use soon', `<div class="chips">${d.food.expiringSoon.map((e) =>
+      `<span class="pill k-pill ${e.days < 0 ? 'bad' : 'warn'}">${foodCat(e.name).emoji} ${esc(e.name)} · ${e.days < 0 ? 'out of date' : e.days === 0 ? 'today' : e.days === 1 ? 'tomorrow' : 'in ' + plural(e.days, 'day')}</span>`).join('')}</div>`),
+    outfits: () => !outfits.length ? '' : panel('outfits', '👕 Wear today', `<div class="k-outfits">${kids.map((c, i) => {
+      const o = outfits[i]?.outfit;
+      return `<div class="k-kid" data-kid-outfit="${esc(c.id)}"><div class="k-kid-name">${avatar(c, i)} ${esc(c.name)}</div>${o
+        ? `<div class="k-garments">${o.items.map((g) => `<span class="k-garment" title="${esc(g.name)}"><span class="tile" style="background:${esc(cssColour(g.colour))}">${GARMENT[g.type] || '👕'}</span>${esc(g.name)}</span>`).join('')}</div>`
+        : '<p class="muted small">No clean outfit that fits.</p>'}</div>`;
+    }).join('')}</div>`),
+    reminders: () => !d.reminders.length ? '' : panel('reminders', '🔔 Reminders', reminderList(d.reminders, 4)),
+    week: () => off('food') ? '' : panel('week', "📅 The week's dinners", weekStrip(d.food.plan)),
+  };
+  const now = new Date();
+  const body = k.panels.map((id) => panels[id]?.() || '').join('');
+  $('#page').innerHTML = `
+    <div class="k-head">
+      <div><div class="k-clock" id="k-clock">${kitchenTime(now)}</div><div class="k-date">${now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
+      <div class="k-title">${esc(d.family.name || 'Family Planner')}${weather && weather.tempC !== null ? `<div class="k-weather">${weather.rain ? '🌧️' : weather.tempC < 12 ? '🧣' : weather.tempC >= 20 ? '☀️' : '⛅'} ${esc(weather.min)}° to ${esc(weather.max)}°${weather.rain ? ' · rain likely' : ''}</div>` : ''}</div>
+      <div class="k-actions">
+        ${document.fullscreenEnabled ? `<button class="btn" data-k-full aria-label="Full screen">${icon('upload')} Full screen</button>` : ''}
+        <button class="btn" data-nav="${look.start === 'kitchen' ? 'settings' : 'home'}">${icon('x')} ${look.start === 'kitchen' ? 'Settings' : 'Exit'}</button>
+      </div>
+    </div>
+    <div class="k-grid">${body || '<section class="card k-panel"><p class="k-empty">Pick what to show in Settings > Kitchen screen.</p></section>'}</div>`;
+  kitchenOn();
+  // With an AI on, tonight's dinner comes from the AI's week, like on Home.
+  if (want('dinner') && !off('food') && state.ai.suggestions) {
+    const r = await aiSuggest('meals');
+    const m = r && !r.error && r.week?.[0];
+    if (m && $('#k-dinner-name')) $('#k-dinner-name').innerHTML = `${esc(m.name)} <span class="pill blue">✨ AI</span>`;
+  }
+}
+
+const kitchenTime = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+function kitchenOn() {
+  const k = look.kitchen;
+  const night = () => { const h = new Date().getHours(); return k.dim && (h >= 22 || h < 6); };
+  document.body.classList.toggle('kitchen-night', night());
+  clearInterval(kitchen.clock);
+  kitchen.clock = setInterval(() => {
+    const c = $('#k-clock');
+    if (c) c.textContent = kitchenTime(new Date());
+    document.body.classList.toggle('kitchen-night', night());
+  }, 10000);
+  clearInterval(kitchen.timer);
+  kitchen.timer = setInterval(() => {
+    if (state.page === 'kitchen' && !$('#dialog').open && document.visibilityState === 'visible') refresh();
+  }, 60000);
+  if (k.awake && 'wakeLock' in navigator && !kitchen.wake) {
+    navigator.wakeLock.request('screen').then((w) => {
+      kitchen.wake = w;
+      w.addEventListener('release', () => { kitchen.wake = null; });
+    }).catch(() => {});
+  }
+}
+
+function kitchenOff() {
+  clearInterval(kitchen.clock);
+  clearInterval(kitchen.timer);
+  kitchen.clock = kitchen.timer = null;
+  document.body.classList.remove('kitchen-night');
+  kitchen.wake?.release().catch(() => {});
+  kitchen.wake = null;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+// The screen lock is dropped when the tab is hidden; take it again on return.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.page === 'kitchen') kitchenOn();
+});
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-k-full]')) document.documentElement.requestFullscreen?.().catch(() => {});
+});
 
 // ---------- demo ----------
 // A made-up family (the Parkers) to show the app off as if it were in daily use. Hidden:
@@ -2244,7 +2496,7 @@ const SHOPS = [
   state.sizes = cm.sizes;
   state.types = cm.types;
   state.units = fm.units;
-  go(location.hash.slice(1) || 'home');
+  go(location.hash.slice(1) || look.start || 'home');
 })();
 
 if ('serviceWorker' in navigator && !window.FamilyPlannerNative) navigator.serviceWorker.register('/sw.js').catch(() => {});

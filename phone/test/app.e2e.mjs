@@ -392,6 +392,56 @@ try {
     ok('hidden demo fills the app with a sample family, and leaving it brings yours back');
     await ctx.close();
   }
+  // 9. Customise (colour, tabs, household name, start page) and the kitchen screen.
+  for (const [width, height, name] of [[1180, 820, 'tablet'], [390, 844, 'phone']]) {
+    const { ctx, page, api, errors } = await open({ width });
+    await page.setViewportSize({ width, height });
+    await api('/demo/start', 'POST');
+    await page.evaluate(() => document.querySelector(`[data-nav="settings"]`).click());
+    await page.waitForSelector('#customise-card');
+    await page.click('[data-look-accent="purple"]');
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.accent), 'purple');
+    await page.uncheck('[data-look-tab="clothes"]');
+    assert.equal(await page.locator('#tabbar [data-nav="clothes"], #nav [data-nav="clothes"]').count(), 0, 'clothes tab hidden');
+    await page.fill('#household-name-form input[name=name]', 'The Schofields');
+    await page.click('#household-name-form button');
+    await page.waitForFunction(() => document.querySelector('.brand-name')?.textContent === 'The Schofields');
+    await page.selectOption('[data-look-start]', 'kitchen');
+    await page.uncheck('[data-look-panel="reminders"]');
+    await page.check('[data-look-panel="week"]');
+
+    // Reopening goes straight to the kitchen screen, in purple, with no tabs.
+    await page.goto('http://localhost:5173/');
+    await page.waitForSelector('.k-head .k-clock');
+    assert.equal(await page.evaluate(() => document.body.classList.contains('kitchen-mode')), true);
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.accent), 'purple');
+    assert.match(await page.textContent('.k-title'), /The Schofields/);
+    assert.equal(await page.locator('#k-reminders').count(), 0);
+    assert.equal(await page.locator('#k-outfits').count(), 0, 'outfits leave with the clothes tab');
+    await page.waitForSelector('#k-week .week');
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'kitchen screen fits');
+    await page.screenshot({ path: `${SHOTS}/kitchen-${name}.png`, fullPage: name === 'phone' });
+
+    // Ticking things off from the kitchen.
+    const before = await page.locator('#k-shopping .k-shop li').count();
+    await page.click('#k-shopping [data-toggle] >> nth=0');
+    await page.waitForFunction((n) => document.querySelectorAll('#k-shopping .k-shop li').length === n - 1, before);
+    await page.click('#k-chores [data-chore-done] >> nth=0');
+    if (await page.locator('#dialog[open]').count()) await page.click('#dialog .actions button:has-text("Done")');
+    await page.waitForSelector('#toast.show:has-text("Well done")');
+
+    // Home shows no clothes cards while clothes are hidden; turning it back on restores them.
+    await page.click('.k-actions [data-nav]');
+    await page.waitForSelector('#customise-card');
+    await page.check('[data-look-tab="clothes"]');
+    await page.selectOption('[data-look-start]', 'home');
+    await page.evaluate(() => document.querySelector('[data-nav="home"]').click());
+    await page.waitForSelector('[data-tool="clothes"]');
+    await api('/demo/stop', 'POST');
+    assert.deepEqual(errors, []);
+    ok(`customise and the kitchen screen work on a ${name}`);
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();
