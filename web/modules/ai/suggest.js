@@ -5,6 +5,7 @@
 // against the real data (only known recipes and clothes, nothing already on the list) and
 // come back in the same shape the pages already show. If the AI fails, pages keep the rules.
 const { TYPES } = require('../clothes/engine');
+const { canDo } = require('../chores/engine');
 
 const str = { type: 'string' };
 const SCHEMAS = {
@@ -43,6 +44,26 @@ const SCHEMAS = {
     required: ['picks', 'week'],
     additionalProperties: false,
   },
+  'suggest-chores': {
+    type: 'object',
+    properties: {
+      assignments: {
+        type: 'array',
+        items: { type: 'object', properties: { day: { type: 'integer' }, choreId: str, personId: str }, required: ['day', 'choreId', 'personId'], additionalProperties: false },
+      },
+      suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { kind: { type: 'string', enum: ['add', 'every'] }, name: str, choreId: str, every: { type: 'integer' }, reason: str },
+          required: ['kind', 'name', 'choreId', 'every', 'reason'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['assignments', 'suggestions'],
+    additionalProperties: false,
+  },
   'suggest-outfits': {
     type: 'object',
     properties: {
@@ -69,6 +90,14 @@ const SYSTEM = {
     'Prefer meals they can cook with what is in, use food that goes off soon first, keep variety (avoid what they had in the last few days), ' +
     'favour their favourites, and follow dietary needs strictly. "picks": up to 5 recipes to cook next, best first, each with one short reason. ' +
     '"week": a dinner for each day from 0 (today) to 6, skipping days where nothing they have would work.',
+  'suggest-chores':
+    'You share out a UK family\'s household chores for the coming week, fairly and sensibly. ' +
+    'Each chore listed is due on the days given: say who does each one, by person id, for each day. ' +
+    'Only give a chore to someone old enough (its minimum age; grown-ups can do anything). Keep a chore with its fixed person if it has one. ' +
+    'Balance effort points across the week, counting what each person did lately; give children age-appropriate jobs and some variety, ' +
+    'and avoid the same person doing the same chore every time. ' +
+    '"suggestions": up to 5 useful changes: chores worth adding for this family ("add", choreId empty), or a better repeat in days ' +
+    'for an existing chore judging by how often they really do it ("every"). One short plain reason each.',
   'suggest-outfits':
     'You choose a child\'s clothes for today from their own wardrobe, by item id from the list given. ' +
     'Each outfit needs a top and a bottom, or a dress, plus shoes, and a coat or jumper when it is cold or wet. ' +
@@ -107,7 +136,7 @@ function habitsText(history, recipesById, now) {
   return { bought: b.join('\n') || '- (nothing recorded yet)', cooked: c.join('\n') || '- (nothing recorded yet)' };
 }
 
-function createSuggesters({ familySummary, food, clothes, shopping }) {
+function createSuggesters({ familySummary, food, clothes, shopping, chores }) {
   const today = () => new Date().toISOString().slice(0, 10);
 
   const shoppingArea = {
@@ -228,7 +257,56 @@ function createSuggesters({ familySummary, food, clothes, shopping }) {
     },
   };
 
-  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea };
+  // Chores: the days things are due come from the rules; the AI decides who does what.
+  const choresArea = chores && {
+    task: 'suggest-chores',
+    prompt() {
+      const v = chores.view();
+      const pts = new Map(v.totals.map((t) => [t.id, t]));
+      const people = v.people.map((p) => `- ${p.id} | ${p.name} | ${p.adult ? 'grown-up' : `age ${p.age != null ? Math.floor(p.age) : '?'}`} | ${pts.get(p.id)?.points || 0} points in the last week`);
+      const list = v.chores.filter((c) => !c.paused).map((c) => `- ${c.id} | ${c.name} | every ${c.every} day${c.every === 1 ? '' : 's'} | effort ${c.effort} | min age ${c.minAge}${c.whoName ? ` | always ${c.whoName}` : ''}`);
+      const days = v.rota.map((d, i) => `- day ${i} (${d.date}): ${d.items.map((it) => it.choreId).join(', ') || 'nothing due'}`);
+      const recent = v.recent.slice(0, 30).map((e) => `- ${e.at.slice(0, 10)}: ${e.name} by ${v.people.find((p) => p.id === e.by)?.name || 'someone'}`);
+      const rules = v.suggestions.map((x) => `- ${x.kind}: ${x.name}${x.every ? ` every ${x.every} days` : ''} (${x.reason})`);
+      return [
+        `Today is ${v.today}.`, familyLine(familySummary()),
+        `People (id | name | who | effort lately):\n${people.join('\n') || '- (nobody)'}`,
+        `Chores (id | name | repeat | effort 1-3 | minimum age | fixed person):\n${list.join('\n') || '- (none yet)'}`,
+        `Due in the coming week (chore ids):\n${days.join('\n')}`,
+        `Done lately:\n${recent.join('\n') || '- (nothing recorded yet)'}`,
+        `Rule-based suggestions:\n${rules.join('\n') || '- (none)'}`,
+        'Share out the week\'s chores and suggest any changes.',
+      ].join('\n\n');
+    },
+    normalize(r) {
+      const v = chores.view();
+      const people = new Map(v.people.map((p) => [p.id, p]));
+      const byId = new Map(v.chores.map((c) => [c.id, c]));
+      const rota = v.rota.map((d) => ({ ...d, items: d.items.map((it) => ({ ...it })) }));
+      for (const a of Array.isArray(r.assignments) ? r.assignments : []) {
+        const day = rota[a.day];
+        const p = people.get(a.personId);
+        const c = byId.get(a.choreId);
+        if (!day || !p || !c || c.who || !canDo(p, c)) continue;
+        const it = day.items.find((x) => x.choreId === a.choreId && !x.ai);
+        if (it) Object.assign(it, { who: p.id, whoName: p.name, ai: true });
+      }
+      for (const d of rota) for (const it of d.items) delete it.ai;
+      const suggestions = [];
+      for (const s of Array.isArray(r.suggestions) ? r.suggestions : []) {
+        const every = Number.isInteger(s.every) && s.every >= 1 && s.every <= 365 ? s.every : null;
+        const reason = String(s.reason || '').trim() || 'Suggested by AI';
+        if (s.kind === 'every' && byId.has(s.choreId) && every && every !== byId.get(s.choreId).every) {
+          suggestions.push({ kind: 'every', choreId: s.choreId, name: byId.get(s.choreId).name, every, reason, source: 'ai' });
+        } else if (s.kind === 'add' && String(s.name || '').trim() && ![...byId.values()].some((c) => c.name.toLowerCase() === String(s.name).trim().toLowerCase())) {
+          suggestions.push({ kind: 'add', name: String(s.name).trim(), every: every || 7, reason, source: 'ai' });
+        }
+      }
+      return { rota, suggestions: suggestions.slice(0, 5) };
+    },
+  };
+
+  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}) };
 }
 
 module.exports = { createSuggesters, SCHEMAS, SYSTEM };

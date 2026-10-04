@@ -8,6 +8,13 @@ export const MEAL = { name: 'Chicken and rice traybake', minutes: 35, servings: 
 export function answerFor(text) {
   // AI suggestions (shopping, meals, outfits): pick from the ids listed in the prompt.
   const ids = (re) => [...text.matchAll(re)].map((m) => m.slice(1));
+  if (/share out a UK family/.test(text)) {
+    // Every chore due today goes to the first person listed; one idea to add.
+    const person = /People \(id[^)]*\):(?:\n|\\n)- ([\w-]+) \|/.exec(text)?.[1];
+    const today = /- day 0 \([^)]*\): ([^\n\\]*)/.exec(text)?.[1] || '';
+    const due = today === 'nothing due' ? [] : today.split(', ').filter(Boolean);
+    return { assignments: due.map((choreId) => ({ day: 0, choreId, personId: person })), suggestions: [{ kind: 'add', name: 'Water the plants', choreId: '', every: 3, reason: 'Ava likes helping in the garden.' }] };
+  }
   if (/shopping list right/.test(text)) return { suggestions: [{ kind: 'food', name: 'Teabags', quantity: 0, childName: '', size: '', reason: 'You get through a box a week.' }] };
   if (/plan dinners for a UK family/.test(text)) {
     const [first] = ids(/(?:\n|\\n)- ([\w-]+) \| /g);

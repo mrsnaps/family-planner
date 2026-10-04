@@ -108,6 +108,7 @@ const ICONS = {
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
   upload: '<path d="M12 16V5M7 10l5-5 5 5M4 20h16"/>',
+  broom: '<path d="M14 3 10 11M6.5 11h7l3.5 10H3z"/><path d="M8 21l1-4M12 21v-4"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
   share: '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/>',
 };
@@ -165,7 +166,8 @@ const PAGES = [
   { id: 'home', label: 'Home', icon: 'home', title: 'Home', render: renderHome },
   { id: 'food', label: 'Food', icon: 'food', title: 'Food planner', render: renderFood },
   { id: 'clothes', label: 'Clothes', icon: 'shirt', title: 'Clothes', render: renderClothes },
-  { id: 'shopping', label: 'Shopping', icon: 'cart', title: 'Shopping list', render: renderShopping },
+  { id: 'shopping', label: 'Shop', icon: 'cart', title: 'Shopping list', render: renderShopping },
+  { id: 'chores', label: 'Chores', icon: 'broom', title: 'Chores', render: renderChores },
   { id: 'family', label: 'Family', icon: 'people', title: 'Family', render: renderFamily },
   { id: 'settings', label: 'Settings', icon: 'gear', title: 'Settings', render: renderSettings },
 ];
@@ -371,6 +373,8 @@ async function renderHome() {
       <ul class="list">${d.handMeDowns.slice(0, 5).map((h) => `<li class="row"><span class="emoji">${GARMENT[h.type] || '👕'}</span>
         <div class="grow"><div class="title">${esc(h.name)} <span class="pill plain">${esc(h.size)}</span></div><div class="sub">${esc(h.fromName)} → ${esc(h.toName)} · ${h.fitsNow ? 'fits now' : 'to grow into'}</div></div>
         <button class="btn sm" data-handdown="${h.itemId}" data-to="${h.toChildId}">Pass to ${esc(h.toName)}</button></li>`).join('')}</ul></div>` : ''}
+
+    ${choresHomeCard(d.chores)}
 
     <div class="card-head" style="margin:26px 0 12px"><h2>Kids' clothes</h2><button class="btn sm" data-nav="clothes">Open wardrobes</button></div>
     ${d.clothes.length ? `<div class="grid g2">${d.clothes.map((s, i) => kidCard(s, i)).join('')}</div>`
@@ -954,6 +958,171 @@ async function aiOutfit(childId, weather) {
   $('#ootd-shuffle').innerHTML = r.outfits.length > 1 ? `<button class="btn" data-shuffle>${icon('shuffle')} Shuffle</button>` : '';
 }
 
+// ---------- chores ----------
+const EVERY = [[1, 'Every day'], [2, 'Every 2 days'], [3, 'Every 3 days'], [7, 'Every week'], [14, 'Every 2 weeks'], [30, 'Every month']];
+const everyText = (n) => EVERY.find(([d]) => d === n)?.[1] || `Every ${n} days`;
+const EFFORT = { 1: 'Quick', 2: 'Medium', 3: 'Big job' };
+const dayName = (date, today) => {
+  const d = Math.round((new Date(date) - new Date(today)) / 86400000);
+  return d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long' });
+};
+
+function choresHomeCard(c) {
+  if (!c || (!c.todayList.length && !c.doneToday)) return '';
+  return `<div class="card" style="margin-top:16px" id="chores-home">
+    <div class="card-head"><h2>🧹 Today's chores</h2><button class="btn sm" data-nav="chores">All chores</button></div>
+    ${c.todayList.length ? `<ul class="list">${c.todayList.slice(0, 6).map((it) => choreRow(it)).join('')}</ul>${c.todayList.length > 6 ? `<p class="hint">+${c.todayList.length - 6} more on the Chores page</p>` : ''}`
+      : `<p class="hint">All done for today. ${c.doneToday} chore${c.doneToday === 1 ? '' : 's'} ticked off.</p>`}
+  </div>`;
+}
+
+function choreRow(it) {
+  return `<li class="row">
+    <span class="emoji">${esc(it.emoji || '🧹')}</span>
+    <div class="grow"><div class="title">${esc(it.name)}${it.overdue ? ' <span class="pill bad">Overdue</span>' : ''}</div>
+      <div class="sub">${it.whoName ? `<button class="btn ghost sm" style="padding:0" data-chore-by="${it.choreId}" title="Someone else did it?">${esc(it.whoName)}</button>` : 'Anyone'} · ${EFFORT[it.effort] || 'Quick'}</div></div>
+    <button class="btn sm primary" data-chore-done="${it.choreId}" data-by="${it.who || ''}">${icon('check')} Done</button>
+    <button class="icon-btn" data-chore-skip="${it.choreId}" aria-label="Not today: ${esc(it.name)}" title="Not today">${icon('clock')}</button>
+  </li>`;
+}
+
+function rotaStrip(rota, today) {
+  return rota.slice(1).map((d) => `<div class="rota-day"><div class="group-title" style="margin-top:12px">${dayName(d.date, today)}</div>
+    ${d.items.length ? d.items.map((it) => `<div class="small" style="margin-top:4px">${esc(it.emoji)} ${esc(it.name)}${it.whoName ? ` · <strong>${esc(it.whoName)}</strong>` : ''}</div>`).join('') : '<p class="hint">Nothing due</p>'}</div>`).join('');
+}
+
+function choreIdeas(list, ai = null) {
+  return `<div class="card" id="chore-ideas" style="margin-top:16px">
+    <div class="card-head"><h2>💡 Ideas</h2>${aiByline(ai)}</div>
+    <p class="hint">${ai && !ai.error ? `From ${esc(ai.by)}, looking at your chores, who's done what and the children's ages.` : "From the children's ages and how often you really do each chore."}</p>
+    ${aiNote(ai, 'ideas')}
+    ${list.length ? `<ul class="list">${list.map((x, i) => `<li class="row">
+      <span class="emoji">${esc(x.emoji || (x.kind === 'every' ? '🔁' : '✨'))}</span>
+      <div class="grow"><div class="title">${x.kind === 'every' ? `${esc(x.name)}: ${esc(everyText(x.every).toLowerCase())}` : esc(x.name)}</div><div class="sub">${esc(x.reason)}</div></div>
+      <button class="btn sm" data-chore-idea="${i}">${x.kind === 'every' ? 'Change' : `${icon('plus')} Add`}</button>
+      <button class="icon-btn" data-chore-idea-no="${i}" aria-label="Not now" title="Not now">${icon('x')}</button></li>`).join('')}</ul>` : emptyState('💡', 'No ideas right now.')}
+  </div>`;
+}
+
+async function renderChores() {
+  const v = await api('/chores');
+  state.chores = v;
+  state.choreIdeas = v.suggestions;
+  const s = v.stats;
+  $('#page-sub').textContent = s.dueToday ? `${plural(s.dueToday, 'chore')} to do today${s.overdue ? `, ${s.overdue} overdue` : ''}` : v.chores.length ? 'All done for today' : 'Share the housework out fairly';
+  const today = v.rota[0];
+  const doneToday = v.recent.filter((e) => e.at.slice(0, 10) === v.today);
+  const nameOf = (id) => v.people.find((p) => p.id === id)?.name || 'Someone';
+  const kidsMoney = v.totals.some((t) => t.money);
+  $('#page').innerHTML = `
+    <div class="split">
+      <div class="stack">
+        <div class="card" id="chores-today">
+          <div class="card-head"><h2>Today</h2><span id="chores-by">${state.ai?.suggestions ? '' : '<span class="muted small">Shared out fairly by age and effort</span>'}</span></div>
+          ${today.items.length ? `<ul class="list">${today.items.map(choreRow).join('')}</ul>` : v.chores.length ? emptyState('🎉', 'Nothing left to do today.') : emptyState('🧹', 'No chores yet. Add some below, or pick from the common ones.')}
+          ${doneToday.length ? `<div class="group-title">Done today</div><ul class="list">${doneToday.map((e) => `<li class="row done"><span class="emoji">✅</span><div class="grow"><div class="title">${esc(e.name)}</div><div class="sub">${esc(nameOf(e.by))}</div></div><button class="btn ghost sm" data-chore-undo="${e.id}">Undo</button></li>`).join('')}</ul>` : ''}
+        </div>
+        <div class="card" id="chores-week">
+          <div class="card-head"><h2>The week ahead</h2></div>
+          <div id="rota-body">${v.chores.length ? rotaStrip(v.rota, v.today) : '<p class="hint">Add chores to see who does what each day.</p>'}</div>
+        </div>
+        ${choreIdeas(v.suggestions)}
+      </div>
+      <div class="stack">
+        <div class="card" id="chores-points">
+          <div class="card-head"><h2>⭐ This week</h2></div>
+          <p class="hint">Points for each chore done: 1 quick, 2 medium, 3 for a big job.</p>
+          <ul class="list">${v.totals.map((t) => `<li class="row"><div class="grow"><div class="title">${esc(t.name)}${t.adult ? ` <button class="btn ghost sm" data-chore-rename="${t.id}" style="padding:0 4px">${icon('edit')}</button>` : ''}</div><div class="sub">${plural(t.done, 'chore')} done</div></div>
+            <strong>${plural(t.points, 'point')}</strong>${t.money != null ? ` <span class="pill">${moneyP(t.money)}</span>` : ''}</li>`).join('')}</ul>
+          <form id="pocket-form" class="form-row" style="grid-template-columns:1fr auto;margin-top:10px">
+            <label class="field">Pocket money per point (pence)<input name="perPoint" type="number" min="0" max="500" step="1" value="${v.perPoint || ''}" placeholder="e.g. 20"></label>
+            <button class="btn" style="align-self:end">Save</button>
+          </form>
+          ${!kidsMoney && !v.perPoint ? '<p class="hint" style="margin-top:6px">Leave empty for points only.</p>' : ''}
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Add a chore</h2></div>
+          ${v.starters.length ? `<div class="chips">${v.starters.slice(0, 14).map((st) => `<button class="chip" data-chore-starter="${st.key}">${esc(st.emoji)} ${esc(st.name)}</button>`).join('')}</div>` : ''}
+          <form id="chore-form" class="stack" style="margin-top:12px">
+            <label class="field">Chore<input name="name" placeholder="e.g. Clean the hamster cage" required></label>
+            <div class="form-row" style="grid-template-columns:1fr 1fr">
+              <label class="field">How often<select name="every">${EVERY.map(([d, l]) => `<option value="${d}" ${d === 7 ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+              <label class="field">Size<select name="effort"><option value="1">Quick</option><option value="2">Medium</option><option value="3">Big job</option></select></label>
+            </div>
+            <div class="form-row" style="grid-template-columns:1fr 1fr">
+              <label class="field">Who<select name="who"><option value="">Share it out</option>${v.people.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+              <label class="field">Youngest age<input name="minAge" type="number" min="0" max="18" value="0"></label>
+            </div>
+            <button class="btn primary">${icon('plus')} Add chore</button>
+          </form>
+        </div>
+        ${v.chores.length ? `<div class="card" id="chores-all">
+          <div class="card-head"><h2>All chores</h2><span class="muted small">${plural(v.chores.length, 'chore')}</span></div>
+          <ul class="list">${v.chores.map((c) => `<li class="row ${c.paused ? 'done' : ''}">
+            <span class="emoji">${esc(c.emoji || '🧹')}</span>
+            <div class="grow"><div class="title">${esc(c.name)}${c.state === 'overdue' && !c.paused ? ' <span class="pill bad">Overdue</span>' : ''}</div>
+              <div class="sub">${esc(everyText(c.every))} · ${c.whoName ? esc(c.whoName) : 'shared out'}${c.minAge ? ` · ${c.minAge}+` : ''} · ${c.paused ? 'paused' : `next ${esc(dayName(c.due < v.today ? v.today : c.due, v.today).toLowerCase())}`}</div></div>
+            <button class="icon-btn" data-chore-edit="${c.id}" aria-label="Change ${esc(c.name)}">${icon('edit')}</button>
+            <button class="icon-btn danger" data-chore-del="${c.id}" aria-label="Remove ${esc(c.name)}">${icon('trash')}</button></li>`).join('')}</ul>
+        </div>` : ''}
+      </div>
+    </div>`;
+  if ((state.ai = await api('/ai/settings')).suggestions && v.chores.length) aiChores();
+}
+
+// With an AI on: it decides who does what this week (the days stay the rules'), and adds ideas.
+async function aiChores(refresh = false) {
+  const by = $('#chores-by');
+  if (by) by.innerHTML = '<span class="muted small">✨ Asking the AI to share out the chores…</span>';
+  const r = await aiSuggest('chores', {}, { refresh });
+  if (!r || !$('#chores-today')) return;
+  if (r.error) {
+    $('#chores-by').innerHTML = '<span class="muted small">Shared out fairly by age and effort</span>';
+    $('#chore-ideas').outerHTML = choreIdeas(state.chores.suggestions, r);
+    return;
+  }
+  state.chores.rota = r.rota;
+  state.choreIdeas = r.suggestions;
+  const today = r.rota[0];
+  const list = $('#chores-today .list');
+  if (list && today.items.length) list.innerHTML = today.items.map(choreRow).join('');
+  $('#rota-body').innerHTML = rotaStrip(r.rota, state.chores.today);
+  $('#chores-by').innerHTML = `${aiByline(r)} <button class="btn ghost sm" data-ai-refresh="chores">Ask again</button>`;
+  $('#chore-ideas').outerHTML = choreIdeas(r.suggestions, r);
+}
+
+async function choreDone(id, by) {
+  const v = state.chores || (await api('/chores'));
+  if (!by) {
+    const got = await ask({ title: 'Who did it?', body: v.people.map((p, i) => `<label class="field" style="margin-top:8px"><span><input type="radio" name="by" value="${p.id}" ${i === 0 ? 'checked' : ''} style="width:auto"> ${esc(p.name)}</span></label>`).join(''), ok: 'Done' });
+    if (!got) return;
+    by = got.by;
+  }
+  const r = await api(`/chores/${id}/done`, { method: 'POST', body: { by } });
+  toast(`Well done${r.entry.by ? ', ' + (v.people.find((p) => p.id === r.entry.by)?.name || '') : ''}! ${r.entry.effort === 1 ? '1 point' : r.entry.effort + ' points'}`);
+  refresh();
+}
+
+async function choreEdit(id) {
+  const c = state.chores.chores.find((x) => x.id === id);
+  const ps = state.chores.people;
+  const everyOpts = [...EVERY, ...(EVERY.some(([d]) => d === c.every) ? [] : [[c.every, everyText(c.every)]])];
+  const got = await ask({
+    title: 'Change chore',
+    body: field('name', 'Chore', 'text', c.name) +
+      `<label class="field" style="margin-top:10px">How often<select name="every">${everyOpts.map(([d, l]) => `<option value="${d}" ${d === c.every ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field" style="margin-top:10px">Size<select name="effort">${[1, 2, 3].map((n) => `<option value="${n}" ${n === c.effort ? 'selected' : ''}>${EFFORT[n]}</option>`).join('')}</select></label>
+      <label class="field" style="margin-top:10px">Who<select name="who"><option value="">Share it out</option>${ps.map((p) => `<option value="${p.id}" ${p.id === c.who ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` +
+      field('minAge', 'Youngest age', 'number', String(c.minAge || 0), 'min="0" max="18"') +
+      `<label class="field" style="margin-top:10px"><span><input type="checkbox" name="paused" ${c.paused ? 'checked' : ''} style="width:auto"> Pause this chore</span></label>`,
+    ok: 'Save',
+  });
+  if (!got) return;
+  await api('/chores/' + id, { method: 'PUT', body: { name: got.name, every: Number(got.every), effort: Number(got.effort), who: got.who || null, minAge: Number(got.minAge || 0), paused: Boolean(got.paused) } });
+  toast('Saved');
+  refresh();
+}
+
 // ---------- family ----------
 async function renderFamily() {
   const f = state.family;
@@ -1086,6 +1255,49 @@ document.addEventListener('click', guard(async (e) => {
     return refresh();
   }
   if (t.hasAttribute('data-week-shop')) return weekShop();
+  if (d.choreDone) return choreDone(d.choreDone, d.by || null);
+  if (d.choreBy) return choreDone(d.choreBy, null);
+  if (d.choreSkip) {
+    await api(`/chores/${d.choreSkip}/skip`, { method: 'POST', body: {} });
+    toast('Moved to tomorrow');
+    return refresh();
+  }
+  if (d.choreUndo) {
+    await api('/chores/log/' + d.choreUndo, { method: 'DELETE' });
+    return refresh();
+  }
+  if (d.choreStarter) {
+    const r = await api('/chores', { method: 'POST', body: { starter: d.choreStarter } });
+    toast(r.added ? `Added ${plural(r.added.length, 'chore')}` : `Added ${r.name}`);
+    return refresh();
+  }
+  if (d.choreEdit) return choreEdit(d.choreEdit);
+  if (d.choreDel) {
+    const c = state.chores.chores.find((x) => x.id === d.choreDel);
+    if (!await ask({ title: 'Remove this chore?', body: `<p class="muted">${esc(c.name)} will no longer come up. What's been done stays in the points.</p>`, ok: 'Remove', danger: true })) return;
+    await api('/chores/' + d.choreDel, { method: 'DELETE' });
+    return refresh();
+  }
+  if (d.choreRename) {
+    const p = state.chores.people.find((x) => x.id === d.choreRename);
+    const got = await ask({ title: 'Name', body: field('name', 'Name', 'text', p.name), ok: 'Save' });
+    if (!got || !got.name) return;
+    await api('/chores/people', { method: 'PUT', body: { adults: [{ id: p.id, name: got.name }] } });
+    return refresh();
+  }
+  if (d.choreIdea !== undefined || d.choreIdeaNo !== undefined) {
+    const x = state.choreIdeas[Number(d.choreIdea ?? d.choreIdeaNo)];
+    if (d.choreIdeaNo !== undefined) {
+      if (x.starter || x.choreId) await api('/chores/suggestions/dismiss', { method: 'POST', body: { key: x.starter || x.choreId } });
+      state.choreIdeas = state.choreIdeas.filter((y) => y !== x);
+      $('#chore-ideas').outerHTML = choreIdeas(state.choreIdeas);
+      return;
+    }
+    if (x.kind === 'every') await api('/chores/' + x.choreId, { method: 'PUT', body: { every: x.every } });
+    else await api('/chores', { method: 'POST', body: x.starter ? { starter: x.starter } : { name: x.name, every: x.every } });
+    toast(x.kind === 'every' ? `${x.name}: ${everyText(x.every).toLowerCase()}` : `Added ${x.name}`);
+    return refresh();
+  }
   if (d.passAll) {
     const r = await api('/clothes/hand-down-all', { method: 'POST', body: { toChildId: d.passAll, fromChildId: d.from || null } });
     toast(`Passed on ${plural(r.moved, 'thing')}`);
@@ -1118,6 +1330,7 @@ document.addEventListener('click', guard(async (e) => {
   if (t.hasAttribute('data-clear-done')) { await api('/shopping/clear-done', { method: 'POST' }); return refresh(); }
   if (d.aiRefresh) {
     if (d.aiRefresh === 'shopping') return aiShopping(true);
+    if (d.aiRefresh === 'chores') return aiChores(true);
     await api('/ai/suggest/' + d.aiRefresh, { method: 'POST', body: { refresh: true } }).catch((e) => toast(e.message));
     return refresh();
   }
@@ -1221,6 +1434,14 @@ document.addEventListener('submit', guard(async (e) => {
     f.elements.type.value = keepType;
     f.elements.type.dispatchEvent(new Event('change', { bubbles: true }));
     f.elements.name.focus();
+  } else if (form.id === 'chore-form') {
+    await api('/chores', { method: 'POST', body: { name: body.name, every: Number(body.every), effort: Number(body.effort), who: body.who || null, minAge: Number(body.minAge || 0) } });
+    toast(`Added ${body.name}`);
+    await refresh();
+  } else if (form.id === 'pocket-form') {
+    await api('/chores/settings', { method: 'PUT', body: { perPoint: Number(body.perPoint || 0) } });
+    toast(Number(body.perPoint) ? `${body.perPoint}p a point` : 'Points only, no pocket money');
+    await refresh();
   } else if (form.id === 'spend-form') {
     await api('/spending', { method: 'POST', body });
     toast('Added to food spending');

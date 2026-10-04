@@ -290,6 +290,52 @@ try {
     ok('hand-me-downs count towards what a sibling needs, and pass on in one tap');
     await ctx.close();
   }
+  // 6. Chores: add, share out, tick off with points, and the AI's rota when it's on.
+  {
+    const { ctx, page, api, errors } = await open();
+    const ava = (await api('/family/children', 'POST', { name: 'Ava', birthDate: '2016-01-01', clothingSize: '9-10Y', shoeSize: '3' })).data;
+    await page.click('[data-nav="chores"]:visible');
+    await page.waitForSelector('#chores-today :text("No chores yet")');
+    await page.click('[data-chore-starter="dishes"]');
+    await page.waitForSelector('#chores-today :text("Wash up or load the dishwasher")');
+    await page.fill('#chore-form input[name=name]', 'Feed the hamster');
+    await page.selectOption('#chore-form select[name=every]', '1');
+    await page.selectOption('#chore-form select[name=who]', ava.id);
+    await page.click('#chore-form button.primary');
+    await page.waitForSelector('#chores-today :text("Feed the hamster")');
+    assert.match(await page.textContent('#chores-today'), /Feed the hamster[\s\S]*Ava/);
+    await page.fill('#pocket-form input[name=perPoint]', '50');
+    await page.click('#pocket-form button');
+    await page.waitForSelector('#toast.show:has-text("50p a point")');
+    const hamster = (await api('/chores')).data.chores.find((c) => c.name === 'Feed the hamster');
+    await page.click(`[data-chore-done="${hamster.id}"]`);
+    await page.waitForSelector('#toast.show:has-text("Well done, Ava")');
+    await page.waitForSelector('#chores-points :text("£0.50")');
+    await page.click('[data-chore-undo]');
+    await page.waitForFunction(() => !document.querySelector('[data-chore-undo]'));
+    assert.equal((await api('/chores')).data.stats.doneToday, 0);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nothing wider than the phone');
+    ok('chores: add from common ones or your own, tick off for points and pocket money, undo');
+
+    await page.click('[data-nav="home"]:visible');
+    await page.waitForSelector('#chores-home :text("Feed the hamster")');
+    await page.click(`#chores-home [data-chore-done="${hamster.id}"]`);
+    await page.waitForSelector('#toast.show:has-text("Well done")');
+    assert.equal((await api('/chores')).data.stats.doneToday, 1);
+    ok("today's chores show on Home and can be ticked off there");
+
+    await api('/ai/settings', 'PUT', { provider: 'custom', baseUrl: 'http://localhost:5174/v1', model: 'mock' });
+    await page.click('[data-nav="chores"]:visible');
+    await page.waitForSelector('#chores-by :text("Ask again")');
+    await page.waitForSelector('#chore-ideas :text("Water the plants")');
+    assert.match(await page.textContent('#chore-ideas'), /✨ AI/);
+    await page.click('#chore-ideas [data-chore-idea="0"]');
+    await page.waitForSelector('#toast.show:has-text("Added Water the plants")');
+    assert.ok((await api('/chores')).data.chores.some((c) => c.name === 'Water the plants'));
+    assert.deepEqual(errors, []);
+    ok('with an AI on, it shares out the chores and suggests new ones');
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();

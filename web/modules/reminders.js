@@ -1,7 +1,7 @@
 // Reminders gathered from every tool, newest-urgent first. The web app shows them on
 // Home; the phone app can turn them into notifications. Each has a stable id so a
 // client can tell which ones it has already shown.
-function reminders({ food, clothes, shopping }) {
+function reminders({ food, clothes, shopping, chores = null }) {
   const out = [];
   for (const e of food.expiringSoon) {
     out.push({
@@ -24,6 +24,15 @@ function reminders({ food, clothes, shopping }) {
     if (s.uniform && s.uniform.buyBeforeTerm && s.uniform.daysToTerm <= 60) {
       out.push({ id: `uniform-${s.childId}-${s.uniform.termStart}`, kind: 'clothes', level: 'warn', date: s.uniform.termStart, title: `Buy ${s.name}'s uniform in ${s.uniform.buySize} before term`, detail: Object.entries(s.uniform.short).map(([t, n]) => `${n} ${t}`).join(', ') });
     }
+  }
+  if (chores && chores.overdue > 0) {
+    const names = chores.overdueNames;
+    out.push({ id: `chores-overdue-${chores.today || ''}-${chores.overdue}`, kind: 'chores', level: 'warn', date: null,
+      title: chores.overdue === 1 ? `${names[0]} is overdue` : `${chores.overdue} chores are overdue`, detail: names.slice(0, 4).join(', ') });
+  }
+  if (chores && chores.dueToday > chores.overdue) {
+    const n = chores.dueToday - chores.overdue;
+    out.push({ id: `chores-today-${n}`, kind: 'chores', level: 'info', date: null, title: `${n} chore${n === 1 ? '' : 's'} to do today` });
   }
   if (shopping > 0) out.push({ id: `shopping-${shopping}`, kind: 'shopping', level: 'info', title: `${shopping} thing${shopping === 1 ? '' : 's'} on the shopping list`, date: null });
   const rank = { urgent: 0, warn: 1, info: 2 };

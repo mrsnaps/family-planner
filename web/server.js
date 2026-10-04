@@ -9,6 +9,7 @@ const family = require('./modules/family');
 const food = require('./modules/food');
 const clothes = require('./modules/clothes');
 const shopping = require('./modules/shopping');
+const chores = require('./modules/chores');
 const ai = require('./modules/ai');
 const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
@@ -41,22 +42,26 @@ function createApp(store) {
     addClothesItem: clothesApi.addItem,
   });
 
-  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi });
+  const choresApi = chores.register(router, store, fam.summary);
+
+  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi });
   const aiApi = ai.register(router, store, { familySummary: fam.summary, food: foodApi, suggesters });
 
-  const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats()) =>
-    reminders({ food, clothes: clothesStats, shopping: shoppingApi.count() });
+  const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats(), choreSummary = choresApi.summary()) =>
+    reminders({ food, clothes: clothesStats, shopping: shoppingApi.count(), chores: choreSummary });
 
   // The combined data panel: one call for a dashboard (or a phone app's home screen).
   router.get('/api/v1/dashboard', () => {
     const food = foodApi.stats();
     const clothesStats = clothesApi.stats();
+    const choreSummary = choresApi.summary();
     return {
       family: fam.summary(),
       food,
       clothes: clothesStats,
       shoppingCount: shoppingApi.count(),
-      reminders: remindersNow(food, clothesStats),
+      chores: choreSummary,
+      reminders: remindersNow(food, clothesStats, choreSummary),
       handMeDowns: clothesApi.handMeDowns(),
       ai: { ready: aiApi.publicSettings().ready, onDevice: aiApi.publicSettings().onDevice },
     };
@@ -64,7 +69,7 @@ function createApp(store) {
   router.get('/api/v1/reminders', () => remindersNow());
 
   // Backup and restore everything except the AI key.
-  const SECTIONS = ['family', 'food', 'clothes', 'shopping'];
+  const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores'];
   router.get('/api/v1/export', () => {
     const data = {};
     for (const k of SECTIONS) if (store.data[k] !== undefined) data[k] = store.data[k];
