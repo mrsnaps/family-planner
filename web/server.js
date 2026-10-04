@@ -13,6 +13,7 @@ const chores = require('./modules/chores');
 const ai = require('./modules/ai');
 const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
+const demo = require('./modules/demo');
 
 const PUBLIC = path.join(__dirname, 'public');
 const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(/\s+/).filter(Boolean);
@@ -69,11 +70,15 @@ function createApp(store) {
   });
   router.get('/api/v1/reminders', () => remindersNow());
 
-  // Backup and restore everything except the AI key.
+  const demoApi = demo.register(router, store, createApp);
+
+  // Backup and restore everything except the AI key. In the demo, the backup is still the
+  // household's own data, and restoring waits until the demo is over.
   const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores'];
   router.get('/api/v1/export', () => {
     const data = {};
-    for (const k of SECTIONS) if (store.data[k] !== undefined) data[k] = store.data[k];
+    const source = demoApi.inDemo() ? store.data.demoSaved || {} : store.data;
+    for (const k of SECTIONS) if (source[k] !== undefined) data[k] = source[k];
     if (store.data.ai) {
       const { apiKey, keyFor, usage, suggestCache, ...rest } = store.data.ai;
       data.ai = rest;
@@ -81,6 +86,7 @@ function createApp(store) {
     return { app: 'family-planner', version: 1, exportedAt: new Date().toISOString(), data };
   });
   router.post('/api/v1/import', (req, body) => {
+    demo.blockInDemo(demoApi);
     const data = body && body.app === 'family-planner' ? body.data : null;
     if (!data || typeof data !== 'object') throw new HttpError(400, 'That is not a Family Planner backup file');
     for (const k of SECTIONS) {

@@ -211,6 +211,21 @@ try {
   assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['beans', 'milk', 'pasta', 'rice']);
   ok("leaving keeps a copy and leaves the others' lists alone");
 
+  // The demo's sample family never reaches the household's online copy.
+  const before = JSON.stringify(cloud.data(EMAIL));
+  await c.api('/demo/start', 'POST');
+  await c.api('/food/items', 'POST', { name: 'Demo only' });
+  await c.sync();
+  await c.page.waitForTimeout(2500);
+  assert.equal(JSON.stringify(cloud.data(EMAIL)), before, 'nothing from the demo is uploaded');
+  assert.equal((await c.status()).demo, true);
+  await c.api('/demo/stop', 'POST');
+  await c.page.waitForFunction(() => !window.FamilyPlannerAccount.status().pending, null, { timeout: 5000 });
+  assert.deepEqual(cloud.data(EMAIL).food.pantry.map((i) => i.name).sort(), ['beans', 'milk', 'pasta', 'rice']);
+  assert.ok(!JSON.stringify(cloud.data(EMAIL)).includes('Mia'));
+  assert.deepEqual(await pantry(c), ['beans', 'milk', 'pasta', 'rice']);
+  ok('the demo stays on the device: nothing is saved online, and the real lists come back');
+
   for (const x of [a, b, c, d]) assert.deepEqual(x.errors, []);
   ok('no page errors');
 } finally {

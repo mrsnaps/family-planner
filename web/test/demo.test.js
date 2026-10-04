@@ -1,0 +1,55 @@
+// Demo mode: a sample family to show the app off, with the household's own data put
+// aside and brought back untouched.
+const test = require('node:test');
+const assert = require('node:assert');
+const http = require('http');
+const { createApp } = require('../server');
+const { Store } = require('../lib/store');
+
+async function start(t) {
+  const server = http.createServer(createApp(new Store(null))).listen(0);
+  t.after(() => server.close());
+  const base = `http://localhost:${server.address().port}/api/v1`;
+  return async (method, path, body) => {
+    const res = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+    return { status: res.status, body: await res.json() };
+  };
+}
+
+test('the demo shows a lived-in family, then puts the real one back exactly', async (t) => {
+  const call = await start(t);
+  await call('POST', '/family/children', { name: 'Real kid', birthDate: '2019-01-01' });
+  await call('POST', '/shopping/items', { name: 'Real milk', kind: 'food' });
+  await call('PUT', '/ai/settings', { provider: 'anthropic', apiKey: 'sk-keep' });
+  const before = (await call('GET', '/export')).body.data;
+
+  assert.deepStrictEqual((await call('GET', '/demo')).body.on, false);
+  assert.strictEqual((await call('POST', '/demo/start')).body.on, true);
+
+  const dash = (await call('GET', '/dashboard')).body;
+  assert.deepStrictEqual(dash.family.children.map((c) => c.name), ['Mia', 'Leo', 'Ruby']);
+  const shop = (await call('GET', '/shopping')).body;
+  assert.ok(shop.items.length >= 5);
+  assert.ok(shop.usuals.length >= 3, 'weekly shops give one-tap usuals');
+  assert.ok(shop.items.some((i) => i.addedBy));
+  assert.ok((await call('GET', '/spending')).body.entries.length >= 5);
+  const chores = (await call('GET', '/chores')).body;
+  assert.ok(chores.chores.length >= 8);
+  assert.ok(chores.totals.some((p) => p.points > 0 && p.money > 0), 'children have earned pocket money');
+  assert.ok((await call('GET', '/food/meals')).body.meals.some((m) => m.status === 'ready'), 'something can be cooked tonight');
+  assert.ok((await call('GET', '/clothes/items')).body.length > 20);
+
+  // Backups during the demo are still the family's own, and restoring waits.
+  assert.deepStrictEqual((await call('GET', '/export')).body.data, before);
+  assert.strictEqual((await call('POST', '/import', { app: 'family-planner', version: 1, data: before })).status, 409);
+
+  // Starting again gives a fresh sample and still remembers the real data.
+  await call('POST', '/family/children', { name: 'Demo extra' });
+  await call('POST', '/demo/start');
+  assert.strictEqual((await call('GET', '/family')).body.children.length, 3);
+
+  assert.strictEqual((await call('POST', '/demo/stop')).body.on, false);
+  assert.deepStrictEqual((await call('GET', '/export')).body.data, before);
+  assert.strictEqual((await call('GET', '/ai/settings')).body.apiKeyHint, '…keep');
+  assert.strictEqual((await call('POST', '/demo/stop')).body.on, false, 'stopping twice is harmless');
+});

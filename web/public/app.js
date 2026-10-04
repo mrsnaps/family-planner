@@ -204,7 +204,10 @@ function go(page) {
 }
 
 async function refresh() {
-  state.family = await api('/family');
+  const [family, demo] = await Promise.all([api('/family'), api('/demo').catch(() => ({ on: false }))]);
+  state.family = family;
+  state.demo = demo;
+  demoBanner();
   if (!state.family.children.some((c) => c.id === state.childId)) state.childId = state.family.children[0]?.id || null;
   const page = PAGES.find((p) => p.id === state.page);
   $('#page-title').textContent = page.title;
@@ -335,7 +338,7 @@ async function renderHome() {
   const budget = d.clothes.reduce((sum, s) => sum + (s.budget ? s.budget.total : 0), 0);
 
   const firstRun = !d.family.children.length && !d.food.plan.length && !d.food.expiringSoon.length;
-  const signedOut = ACCOUNT && !ACCOUNT.status().signedIn;
+  const signedOut = ACCOUNT && !ACCOUNT.status().signedIn && !state.demo?.on;
   let nudge = signedOut && !firstRun;
   try { nudge = nudge && !localStorage.getItem('fp-account-nudge'); } catch {}
   $('#page').innerHTML = `
@@ -1520,6 +1523,13 @@ async function loadHousehold() {
 
 function accountCard() {
   if (!ACCOUNT) return '';
+  if (state.demo?.on) {
+    return `
+    <div class="card" id="account-card" style="margin-bottom:16px">
+      <div class="card-head"><h2>☁️ Account</h2><span class="pill plain">Paused for the demo</span></div>
+      <p class="hint" style="margin-top:8px">Nothing is saved online while the demo is on, and the sample family never leaves this device. Leave the demo to get back to your own lists.</p>
+    </div>`;
+  }
   const s = ACCOUNT.status();
   const saved = s.savedAt ? `Last saved online ${new Date(s.savedAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.` : '';
   return `
@@ -1836,6 +1846,7 @@ async function renderSettings() {
           <button class="btn primary" style="margin-top:12px">Save prices</button>
         </form>
       </div>
+      ${demoCard()}
       <div class="card">
         <div class="card-head"><h2>💾 Backup</h2></div>
         <p class="hint">Download everything as a file, or restore from one. Restoring replaces what's here now.</p>
@@ -1844,8 +1855,72 @@ async function renderSettings() {
           <button class="btn" data-import>${icon('upload')} Restore from file</button>
         </div>
       </div>
-    </div>`;
+    </div>
+    <p class="muted small" id="about-line" style="text-align:center;margin:24px 0 8px;user-select:none">Family Planner</p>`;
   if (!household) loadHousehold();
+}
+
+// ---------- demo ----------
+// A made-up family (the Parkers) to show the app off as if it were in daily use. Hidden:
+// tap "Family Planner" at the bottom of Settings five times. While it's on, a banner shows
+// on every page, and the household's own data waits, untouched, until the demo ends.
+function demoBanner() {
+  const b = $('#demo-banner');
+  if (!b) return;
+  b.hidden = !state.demo?.on;
+  b.innerHTML = state.demo?.on ? `<span>🎬 <strong>Demo</strong>: showing a sample family. Your own data is safe.</span> <button class="btn sm" data-demo="stop">Leave demo</button>` : '';
+}
+
+function demoCard() {
+  const on = state.demo?.on;
+  return `
+      <div class="card" id="demo-card" ${on || state.demoUnlocked ? '' : 'hidden'}>
+        <div class="card-head"><h2>🎬 Demo</h2>${on ? '<span class="pill warn">On</span>' : ''}</div>
+        <p class="hint">${on
+    ? 'The app is showing the Parker family: three children, a stocked kitchen, wardrobes, a shopping list, chores and a few weeks of history. Change anything you like; none of it is kept.'
+    : 'Fill the app with a sample family to show how it looks in daily use. Your own data is put aside and comes back exactly as it was when you leave the demo.'}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          ${on
+    ? `<button class="btn primary" data-demo="stop">Leave demo</button><button class="btn" data-demo="start">Start the demo again</button>`
+    : `<button class="btn primary" data-demo="start">Show the demo</button>`}
+        </div>
+      </div>`;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#about-line')) aboutTapped();
+});
+
+function aboutTapped() {
+  const now = Date.now();
+  state.aboutTaps = (state.aboutTaps || []).filter((t) => now - t < 3000).concat(now);
+  if (state.aboutTaps.length < 5 || state.demoUnlocked) return;
+  state.demoUnlocked = true;
+  const card = $('#demo-card');
+  if (card) {
+    card.hidden = false;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+async function demoAction(what) {
+  if (what === 'start') {
+    if (!state.demo?.on && !(await ask({
+      title: 'Show the demo?',
+      body: '<p class="muted">The app will show a sample family instead of yours. Your own data is put aside, nothing is saved online while the demo is on, and everything comes back when you tap <strong>Leave demo</strong>.</p>',
+      ok: 'Show the demo',
+    }))) return;
+    await api('/demo/start', { method: 'POST' });
+    state.weather = null;
+    toast(state.demo?.on ? 'Demo started again' : 'Demo on: meet the Parkers');
+    return go('home');
+  }
+  await api('/demo/stop', { method: 'POST' });
+  state.demoUnlocked = false;
+  state.weather = null;
+  toast('Demo off: your own data is back');
+  if (ACCOUNT) ACCOUNT.syncNow?.().catch?.(() => {});
+  return go(state.page === 'settings' ? 'settings' : 'home');
 }
 
 // ---------- photos, barcodes, AI ----------
@@ -2090,6 +2165,7 @@ document.addEventListener('click', guard(async (e) => {
     return refresh();
   }
   if (t.hasAttribute('data-account')) return accountAction(t.dataset.account);
+  if (t.hasAttribute('data-demo')) return demoAction(t.dataset.demo);
   if (t.hasAttribute('data-copy-list') || t.hasAttribute('data-share-list')) {
     const { items } = await api('/shopping');
     const text = shoppingText(items);

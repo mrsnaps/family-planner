@@ -54,6 +54,8 @@ async function cognito(action, body) {
 // What gets uploaded: everything except this device's AI key (and which server it's for) and usage count.
 export function shareable(data) {
   const out = { ...data };
+  delete out.demo;
+  delete out.demoSaved;
   if (out.ai) {
     const { apiKey, keyFor, usage, ...rest } = out.ai;
     out.ai = rest;
@@ -97,6 +99,12 @@ export function createAccount(store) {
   let pendingChoice = null;
   let changes = 0; // counts saves, so a change made while uploading isn't marked as saved
   let base = null;
+  // Demo mode (Settings): the sample family stays on this device only.
+  const inDemo = () => Boolean(store.data.demo);
+  const notInDemo = () => {
+    if (inDemo()) throw new AccountError('Demo', 'Leave the demo first (Settings > Demo).');
+  };
+
   const keepBase = (v) => {
     base = v && JSON.parse(JSON.stringify(v)); // a copy: the app keeps changing its own data in place
     return saveJson(BASE_KEY, v);
@@ -118,6 +126,7 @@ export function createAccount(store) {
       savedAt: sync.savedAt,
       pending: sync.dirty,
       syncing: Boolean(busy),
+      demo: inDemo(),
       error,
     };
   }
@@ -200,7 +209,7 @@ export function createAccount(store) {
 
   // Quick check for changes saved by someone else (only the version, not the data).
   async function check() {
-    if (!session || busy || sync.dirty) return status();
+    if (!session || busy || sync.dirty || inDemo()) return status();
     try {
       const r = await api('GET', null, '/rev');
       if (r.rev && r.rev !== sync.rev) return syncNow('live');
@@ -212,7 +221,7 @@ export function createAccount(store) {
 
   // One sync at a time; pushes local changes first, then picks up other devices' changes.
   function syncNow(reason = 'remote') {
-    if (!session) return Promise.resolve(status());
+    if (!session || inDemo()) return Promise.resolve(status());
     if (busy) return busy.then(() => (sync.dirty ? syncNow(reason) : status()));
     busy = (async () => {
       changed();
@@ -248,6 +257,7 @@ export function createAccount(store) {
   }
 
   async function signIn(email, password) {
+    notInDemo();
     email = String(email || '').trim().toLowerCase();
     const r = await cognito('InitiateAuth', { AuthFlow: 'USER_PASSWORD_AUTH', AuthParameters: { USERNAME: email, PASSWORD: password } });
     if (!r.AuthenticationResult) throw new AccountError(r.ChallengeName, 'This account needs setting up again. Please contact support.');
@@ -273,6 +283,7 @@ export function createAccount(store) {
   // Household: each person has their own login; invite codes let them share one household.
   const signedIn = () => {
     if (!session) throw new AccountError('SignedOut', 'Sign in first.');
+    notInDemo();
   };
   const settle = () => (busy ? busy.catch(() => {}) : Promise.resolve());
 
@@ -319,7 +330,8 @@ export function createAccount(store) {
     leave,
     // Called by main.js whenever the app saves.
     noteChange() {
-      if (!session) return;
+      // The demo's sample family is never saved online, and online changes wait until it ends.
+      if (!session || inDemo()) return;
       changes += 1;
       sync.dirty = true;
       keepSync();

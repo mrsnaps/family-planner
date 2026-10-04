@@ -20,6 +20,8 @@ async function start() {
   let timer;
   const reschedule = () => {
     clearTimeout(timer);
+    // No phone reminders about the demo's made-up family.
+    if (store.data.demo) return;
     timer = setTimeout(() => scheduleFromReminders(localFetch).catch(() => {}), 3000);
   };
   // Household account: when signed in, pick up the latest saved copy before the UI starts

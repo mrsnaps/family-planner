@@ -364,6 +364,34 @@ try {
     ok('text from saved or imported data never becomes page code');
     await ctx.close();
   }
+  // 8. The hidden demo: five taps on "Family Planner" in Settings, then a sample family.
+  {
+    const { ctx, page, api, errors } = await open();
+    await api('/family/children', 'POST', { name: 'Real kid', birthDate: '2019-01-01' });
+    await page.click('[data-nav="settings"]:visible');
+    await page.waitForSelector('#about-line');
+    assert.equal(await page.locator('#demo-card').isVisible(), false, 'the demo is hidden at first');
+    for (let i = 0; i < 5; i++) await page.click('#about-line');
+    await page.click('#demo-card [data-demo="start"]');
+    await page.click('#dialog .actions button:has-text("Show the demo")');
+    await page.waitForSelector('#demo-banner:has-text("sample family")');
+    await page.waitForSelector('#page :text("Mia")');
+    for (const nav of ['home', 'food', 'clothes', 'shopping', 'chores', 'family']) {
+      await page.click(`[data-nav="${nav}"]:visible`);
+      await page.waitForFunction((n) => document.querySelector(`#tabbar [data-nav="${n}"]`)?.classList.contains('active'), nav);
+      await page.waitForTimeout(400);
+      assert.equal(await page.locator('#demo-banner').isVisible(), true);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${nav} fits the screen`);
+      await page.screenshot({ path: `${SHOTS}/demo-${nav}.png`, fullPage: true });
+    }
+    await page.click('#demo-banner [data-demo="stop"]');
+    await page.waitForSelector('#toast.show:has-text("your own data is back")');
+    assert.deepEqual((await api('/family')).data.children.map((c) => c.name), ['Real kid']);
+    assert.equal(await page.locator('#demo-banner').isVisible(), false);
+    assert.deepEqual(errors, []);
+    ok('hidden demo fills the app with a sample family, and leaving it brings yours back');
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();
