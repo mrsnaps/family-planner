@@ -83,16 +83,14 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
   const data = () => store.get('shopping', DEFAULT);
   const dismissed = () => (data().dismissed ||= {});
 
-  router.get('/api/v1/shopping', () => ({
-    items: data().items,
-    suggestions: suggest({
-      meals: meals(),
-      clothesStats: clothesStats(),
-      existing: data().items,
-      habits: habitSuggestions({ history: foodHistory(), pantry: pantry(), favourites: favourites(), mealsFor }),
-      dismissed: dismissed(),
-    }),
-  }));
+  const ruleSuggestions = () => suggest({
+    meals: meals(),
+    clothesStats: clothesStats(),
+    existing: data().items,
+    habits: habitSuggestions({ history: foodHistory(), pantry: pantry(), favourites: favourites(), mealsFor }),
+    dismissed: dismissed(),
+  });
+  router.get('/api/v1/shopping', () => ({ items: data().items, suggestions: ruleSuggestions() }));
 
   // "Not now": hide a suggestion for a while. It comes back if it's still true later.
   router.post('/api/v1/shopping/suggestions/dismiss', (req, body) => {
@@ -169,7 +167,7 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
     return { ok: true };
   });
 
-  return { count: () => data().items.filter((i) => !i.done).length };
+  return { count: () => data().items.filter((i) => !i.done).length, items: () => data().items, dismissed, ruleSuggestions, keyOf };
 }
 
 module.exports = { register, suggest };

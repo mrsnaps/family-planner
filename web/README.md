@@ -94,6 +94,7 @@ Everything the UI does goes through this JSON API, and CORS is open, so a phone 
 | GET | `/api/v1/clothes/outfits/:childId?season=any&limit=50` | Ranked outfit combinations |
 | GET | `/api/v1/clothes/stats` | Per-child counts, shortfall, forecast, next-size shopping list |
 | GET | `/api/v1/shopping` | Shopping list items and suggestions (each with `reason`, `source` and `key`) |
+| POST | `/api/v1/ai/suggest/:area` | AI suggestions for `shopping`, `meals` (picks + week) or `outfits` (`childId`, `tempC`, `rain`); `refresh` asks again, `result` hands in an on-device answer |
 | POST | `/api/v1/shopping/suggestions/dismiss` | `{ key }`: hide a suggestion for 14 days |
 | POST | `/api/v1/shopping/items` | Add `{ name, kind: food\|clothes\|other, quantity, childId, size, type, note }` |
 | PUT/DELETE | `/api/v1/shopping/items/:id` | Update (e.g. `{ done: true }`) or remove |

@@ -84,15 +84,34 @@ export function withOnDevice(localFetch) {
       if (!res.ok) return res;
       const s = await res.json();
       const st = await onDeviceStatus({ refresh: true });
+      const ready = Boolean(s.ready || (s.onDevice && st.available));
       return json({
         ...s,
         onDeviceAvailable: Boolean(st.available),
         onDeviceReason: REASONS[st.reason] || REASONS.unknown,
-        ready: Boolean(s.ready || (s.onDevice && st.available)),
+        ready,
+        suggestions: Boolean(ready && s.useForSuggestions !== false),
       });
     }
 
-    const handler = method === 'POST' && handlers[path];
+    // AI suggestions (shopping, meals, outfits): worked out on the phone, then handed to the
+    // web app, which checks the answer against the household's data and remembers it.
+    const area = method === 'POST' && /^\/api\/v1\/ai\/suggest\/([a-z]+)$/.exec(path)?.[1];
+    const handler = method === 'POST' && (handlers[path] || (area && (async (body) => {
+      if (body.result) return null; // already worked out
+      const q = new URLSearchParams();
+      for (const k of ['childId', 'tempC', 'rain']) if (body[k] !== undefined && body[k] !== null) q.set(k, String(body[k]));
+      if (!body.refresh) {
+        // Let the web app answer from its memory when nothing has changed.
+        const cached = await localFetch(url, { ...init, body: JSON.stringify({ ...body, cacheOnly: true }) });
+        if (cached.ok) return cached.json();
+      }
+      const result = await generate(`suggest-${area}`, undefined, `?${q}`);
+      const res = await localFetch(url, { ...init, body: JSON.stringify({ ...body, result, by: BY }) });
+      const data = await res.json();
+      if (!res.ok) throw Object.assign(new Error(data.error || 'Suggestion failed'), { status: res.status });
+      return data;
+    })));
     if (!handler) return localFetch(url, init);
 
     const settings = await get('/api/v1/ai/settings');
@@ -106,7 +125,9 @@ export function withOnDevice(localFetch) {
       return json({ error: 'Invalid JSON' }, 400);
     }
     try {
-      return json(await handler(body));
+      const out = await handler(body);
+      if (out === null) return localFetch(url, init);
+      return json(out);
     } catch (err) {
       if (err.status === 400) return json({ error: err.message }, 400);
       // Too much for the small on-device model, or it couldn't read the photo:

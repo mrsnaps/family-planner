@@ -9,6 +9,8 @@ It also has a shared shopping list, reminders, and optional AI help (meal ideas,
 
 **No AI is required.** Every feature works without one. Suggestions such as the weekly dinner plan, what to add to the shopping list (things that ran out, regulars that are due, ingredients for the meals you cook most) and when the kids need clothes all come from plain rules over your own data. AI only adds extras on top, and without it you just type a little more.
 
+**With an AI set up**, every suggestion switches to the AI: the shopping suggestions, what to cook next, the week's dinners and the outfit of the day. The AI gets the household's data and the rules' answer as a starting point. Its answer is checked against the real data (only your own recipes and clothes, nothing already on the list), and answers are remembered until the data changes, so the same question isn't paid for twice. If the AI can't help, the page keeps the rules' suggestions and says so. **Settings > AI helper > Use AI for suggestions** switches back to the rules. Reminders and size forecasts stay as rules, because they are facts worked out from dates and sizes.
+
 ## What's in this repository
 
 | Folder | What it is |

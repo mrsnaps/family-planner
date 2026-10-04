@@ -10,6 +10,7 @@ const food = require('./modules/food');
 const clothes = require('./modules/clothes');
 const shopping = require('./modules/shopping');
 const ai = require('./modules/ai');
+const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
 
 const PUBLIC = path.join(__dirname, 'public');
@@ -40,7 +41,8 @@ function createApp(store) {
     addClothesItem: clothesApi.addItem,
   });
 
-  const aiApi = ai.register(router, store, { familySummary: fam.summary, food: foodApi });
+  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi });
+  const aiApi = ai.register(router, store, { familySummary: fam.summary, food: foodApi, suggesters });
 
   const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats()) =>
     reminders({ food, clothes: clothesStats, shopping: shoppingApi.count() });
@@ -67,7 +69,7 @@ function createApp(store) {
     const data = {};
     for (const k of SECTIONS) if (store.data[k] !== undefined) data[k] = store.data[k];
     if (store.data.ai) {
-      const { apiKey, usage, ...rest } = store.data.ai;
+      const { apiKey, usage, suggestCache, ...rest } = store.data.ai;
       data.ai = rest;
     }
     return { app: 'family-planner', version: 1, exportedAt: new Date().toISOString(), data };

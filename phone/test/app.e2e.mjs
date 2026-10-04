@@ -81,6 +81,24 @@ try {
     assert.equal(m.data.ideas[0].name, 'Chicken and rice traybake');
     ok('extra AI (OpenAI-compatible) works from the phone');
 
+    // With an AI set up, suggestions come from it: shown on the Shopping page with an AI badge.
+    assert.equal((await api('/ai/settings')).data.suggestions, true);
+    const sm = await api('/ai/suggest/meals', 'POST', {});
+    assert.equal(sm.status, 200, JSON.stringify(sm.data));
+    assert.equal(sm.data.by, 'mock');
+    assert.equal(sm.data.picks[0].why, 'Uses the chicken before it goes off.');
+    await page.click('[data-nav="shopping"]:visible');
+    await page.waitForSelector('#suggest-card :text("Teabags")');
+    assert.match(await page.textContent('#suggest-card'), /✨ AI/);
+    await page.click('[data-nav="settings"]:visible');
+    await page.click('[data-ai-suggestions]');
+    await page.waitForSelector('[data-ai-suggestions]:not(:checked)');
+    await page.click('[data-nav="shopping"]:visible');
+    await page.waitForSelector('#suggest-card');
+    assert.doesNotMatch(await page.textContent('#suggest-card'), /Teabags|✨ AI/);
+    await api('/ai/settings', 'PUT', { useForSuggestions: true });
+    ok('with an AI set up, suggestions come from it; switching it off brings back the rules');
+
     // Claude as the extra AI: the browser-access header is added on the way out.
     let claudeHeaders = null;
     await page.route('https://api.anthropic.com/**', (r) => {
@@ -123,6 +141,27 @@ try {
     assert.match(call.prompt, /chicken thighs: 600 g/);
     assert.match(call.prompt, /no spice/);
     assert.equal(JSON.parse(call.schemaJson).required[0], 'ideas');
+
+    // Suggestions on the iPhone's own AI, outfits included.
+    const ss = await api('/ai/suggest/shopping', 'POST', {});
+    assert.equal(ss.status, 200, JSON.stringify(ss.data));
+    assert.equal(ss.data.by, 'iPhone AI');
+    assert.equal(ss.data.suggestions[0].name, 'Teabags');
+    const kid = (await api('/family')).data.children[0];
+    const top = (await api('/clothes/items', 'POST', { childId: kid.id, name: 'Red tee', type: 'top', size: '5-6Y', colour: 'red' })).data;
+    await api('/clothes/items', 'POST', { childId: kid.id, name: 'Blue jeans', type: 'bottom', size: '5-6Y', colour: 'blue' });
+    const so = await api('/ai/suggest/outfits', 'POST', { childId: kid.id });
+    assert.equal(so.data.by, 'iPhone AI');
+    assert.equal(so.data.outfits[0].items[0].id, top.id);
+    assert.equal(ai.calls.length, extraCalls, 'nothing went to the extra AI');
+    // New clothes changed what the AI should know, so it was asked again; asking twice is free.
+    assert.equal((await api('/ai/suggest/shopping', 'POST', {})).data.cached, false);
+    const deviceCalls = await page.evaluate(() => globalThis.__fpOnDeviceMock.calls.length);
+    assert.equal((await api('/ai/suggest/shopping', 'POST', {})).data.cached, true);
+    assert.equal(await page.evaluate(() => globalThis.__fpOnDeviceMock.calls.length), deviceCalls, 'unchanged data is answered from memory');
+    await page.click('[data-nav="clothes"]:visible');
+    await page.waitForSelector('#ootd-body :text("Comfy for the park")');
+    ok('suggestions and outfits run on the iPhone AI, and repeat questions are answered from memory');
     assert.equal(ai.calls.length, extraCalls); // nothing went to an extra AI
     ok('meal ideas run on the iPhone, using the web app’s own prompt and schema');
 

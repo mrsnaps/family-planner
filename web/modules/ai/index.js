@@ -6,9 +6,10 @@
 const { HttpError } = require('../../lib/http');
 const { PRESETS, presetFor, callProvider } = require('./providers');
 const { TYPES } = require('../clothes/engine');
+const SUGGEST = require('./suggest');
 
 const UNITS = ['g', 'kg', 'ml', 'l', 'pcs', 'tin', 'pack'];
-const DEFAULT = { provider: 'none', model: '', baseUrl: '', apiKey: '', onDevice: true, monthlyLimit: 100, usage: { month: '', count: 0 } };
+const DEFAULT = { provider: 'none', model: '', baseUrl: '', apiKey: '', onDevice: true, useForSuggestions: true, monthlyLimit: 100, usage: { month: '', count: 0 } };
 
 const SCHEMAS = {
   'meal-ideas': {
@@ -123,7 +124,15 @@ const SCAN_PROMPT = {
   'scan-clothes': 'Describe the clothes in this photo.',
 };
 
-function register(router, store, { familySummary, food }) {
+// A short fingerprint of a prompt, so the same question isn't paid for twice.
+function fingerprint(text) {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36) + text.length.toString(36);
+}
+const CACHE_HOURS = 24;
+
+function register(router, store, { familySummary, food, suggesters = {} }) {
   const settings = () => {
     const s = store.get('ai', DEFAULT);
     for (const [k, v] of Object.entries(DEFAULT)) if (s[k] === undefined) s[k] = structuredClone(v);
@@ -138,6 +147,13 @@ function register(router, store, { familySummary, food }) {
       apiKeyHint: apiKey ? `…${apiKey.slice(-4)}` : null,
       ready: rest.provider !== 'none' && Boolean(preset),
     };
+  };
+  // Pages ask the AI for suggestions only when this is true (the phone app also counts
+  // its built-in AI as ready).
+  const withSuggestions = (s) => ({ ...s, suggestions: Boolean(s.ready && s.useForSuggestions) });
+  const publicView = () => {
+    const { suggestCache, ...s } = publicSettings();
+    return withSuggestions(s);
   };
 
   // Count each call against a monthly cap so a paid AI can't run up a surprise bill.
@@ -155,7 +171,7 @@ function register(router, store, { familySummary, food }) {
   const run = async (task, { text, image }) => {
     spend();
     try {
-      return await callProvider(settings(), { system: SYSTEM[task], text, image, schema: SCHEMAS[task] });
+      return await callProvider(settings(), { system: SYSTEM[task] || SUGGEST.SYSTEM[task], text, image, schema: SCHEMAS[task] || SUGGEST.SCHEMAS[task] });
     } catch (e) {
       throw new HttpError(e.status || 502, e.message);
     }
@@ -170,7 +186,7 @@ function register(router, store, { familySummary, food }) {
   });
 
   router.get('/api/v1/ai/providers', () => PRESETS);
-  router.get('/api/v1/ai/settings', () => publicSettings());
+  router.get('/api/v1/ai/settings', () => publicView());
 
   router.put('/api/v1/ai/settings', (req, body) => {
     const s = settings();
@@ -192,19 +208,25 @@ function register(router, store, { familySummary, food }) {
     }
     if (body.apiKey !== undefined) s.apiKey = String(body.apiKey || '').trim();
     if (body.onDevice !== undefined) s.onDevice = Boolean(body.onDevice);
+    if (body.useForSuggestions !== undefined) s.useForSuggestions = Boolean(body.useForSuggestions);
     if (body.monthlyLimit !== undefined) {
       const n = Number(body.monthlyLimit);
       if (!Number.isInteger(n) || n < 0) throw new HttpError(400, 'monthlyLimit must be a whole number (0 = no limit)');
       s.monthlyLimit = n;
     }
     store.save();
-    return publicSettings();
+    return publicView();
   });
 
   // Prompt + schema for a task, filled with this household's data.
   // For on-device AI: run it on the phone, then save with the bulk endpoints.
   router.get('/api/v1/ai/tasks/:task', (req, body, { task }) => {
-    if (!SCHEMAS[task]) throw new HttpError(404, `Unknown task. Try: ${Object.keys(SCHEMAS).join(', ')}`);
+    const area = Object.values(suggesters).find((a) => a.task === task);
+    if (area) {
+      const params = suggestParams(Object.fromEntries(req.query), area);
+      return { task, system: SUGGEST.SYSTEM[task], prompt: area.prompt(params), needsImage: false, schema: SUGGEST.SCHEMAS[task], saveWith: `POST /api/v1/ai/suggest/${task.slice(8)} with { result }` };
+    }
+    if (!SCHEMAS[task]) throw new HttpError(404, `Unknown task. Try: ${[...Object.keys(SCHEMAS), ...Object.keys(SUGGEST.SCHEMAS)].join(', ')}`);
     return {
       task,
       system: SYSTEM[task],
@@ -213,6 +235,50 @@ function register(router, store, { familySummary, food }) {
       schema: SCHEMAS[task],
       saveWith: { 'meal-ideas': 'POST /api/v1/ai/meal-ideas/save', 'scan-food': 'POST /api/v1/food/items/bulk', 'scan-clothes': 'POST /api/v1/clothes/items/bulk' }[task],
     };
+  });
+
+  // Suggestions from the AI for one area: shopping, meals or outfits (with childId, and
+  // tempC and rain when the weather is known). Cached until the household's data changes,
+  // or for a day. "result" is an answer the phone's on-device AI already worked out.
+  const suggestParams = (b, area) => {
+    const p = { childId: b.childId || null, tempC: b.tempC === undefined || b.tempC === null || b.tempC === '' ? null : Number(b.tempC), rain: b.rain === true || b.rain === '1' || b.rain === 'true' };
+    for (const k of area.needs || []) if (!p[k]) throw new HttpError(400, `${k} is needed`);
+    if (p.tempC !== null && !Number.isFinite(p.tempC)) p.tempC = null;
+    return p;
+  };
+  router.post('/api/v1/ai/suggest/:area', async (req, body, { area: name }) => {
+    const area = Object.prototype.hasOwnProperty.call(suggesters, name) ? suggesters[name] : null;
+    if (!area) throw new HttpError(404, `Unknown area. Try: ${Object.keys(suggesters).join(', ')}`);
+    body = body || {};
+    const params = suggestParams(body, area);
+    let prompt;
+    try {
+      prompt = area.prompt(params);
+    } catch (e) {
+      throw new HttpError(e.status || 400, e.message);
+    }
+    const s = settings();
+    const cache = (s.suggestCache ||= {});
+    const slot = name + (params.childId ? ':' + params.childId : '');
+    const hash = fingerprint(prompt);
+    const hit = cache[slot];
+    let entry;
+    if (body.result && typeof body.result === 'object') {
+      entry = { hash, at: new Date().toISOString(), by: String(body.by || 'iPhone AI'), raw: body.result };
+    } else if (!body.refresh && hit && hit.hash === hash && Date.now() - new Date(hit.at) < CACHE_HOURS * 3600000) {
+      entry = hit;
+    } else if (body.cacheOnly) {
+      throw new HttpError(404, 'Nothing remembered for this yet');
+    } else {
+      if (!publicSettings().ready) throw new HttpError(409, 'No AI is set up, so suggestions come from the app\'s own rules.');
+      const raw = await run(area.task, { text: prompt });
+      entry = { hash, at: new Date().toISOString(), by: s.model || presetFor(s.provider)?.label || s.provider, raw };
+    }
+    if (entry !== hit) {
+      cache[slot] = entry;
+      store.save();
+    }
+    return { area: name, by: entry.by, at: entry.at, cached: entry === hit, ...area.normalize(entry.raw, params) };
   });
 
   router.post('/api/v1/ai/test', async () => {

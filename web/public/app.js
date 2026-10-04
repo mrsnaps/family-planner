@@ -304,6 +304,7 @@ const emptyState = (emoji, text, action = '') =>
 
 // ---------- home ----------
 async function renderHome() {
+  state.ai = await api('/ai/settings');
   const [d, targets] = await Promise.all([api('/dashboard'), api('/clothes/targets')]);
   state.targets = targets;
   state.shoppingCount = d.shoppingCount;
@@ -341,8 +342,8 @@ async function renderHome() {
     ${d.reminders.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>🔔 Reminders</h2><span class="muted small">${plural(d.reminders.length, 'thing')} to know</span></div>${reminderList(d.reminders)}</div>` : ''}
 
     <div class="card" style="margin-top:16px">
-      <div class="card-head"><h2>This week's dinners</h2><span class="muted small">Planned from what's in, using food that goes off first</span></div>
-      ${weekStrip(d.food.plan)}
+      <div class="card-head"><h2>This week's dinners</h2><span class="muted small" id="week-by">Planned from what's in, using food that goes off first</span></div>
+      <div id="week-strip">${weekStrip(d.food.plan)}</div>
       ${balanceChips(d.food.balance)}
       ${d.food.expiringSoon.length ? `<div class="chips" style="margin-top:14px">${d.food.expiringSoon.map((e) =>
         `<span class="pill ${e.days < 0 ? 'bad' : 'warn'}">${foodCat(e.name).emoji} ${esc(e.name)} · ${e.days < 0 ? 'out of date' : e.days === 0 ? 'today' : 'in ' + plural(e.days, 'day')}</span>`).join('')}</div>` : ''}
@@ -357,7 +358,39 @@ async function renderHome() {
     ${d.clothes.length ? `<div class="grid g2">${d.clothes.map((s, i) => kidCard(s, i)).join('')}</div>`
       : `<div class="card">${emptyState('👶', 'No children added yet.', '<button class="btn primary" data-nav="family">Add a child</button>')}</div>`}
   `;
+  if (state.ai.suggestions) aiWeek(d.food.plan);
 }
+
+// The AI's week of dinners, with the rules' plan filling any day it left empty.
+async function aiWeek(rulePlan) {
+  $('#week-by').textContent = '✨ Asking the AI to plan the week…';
+  const r = await aiSuggest('meals');
+  if (!r || !$('#week-strip')) return;
+  if (r.error || !r.week.some(Boolean)) {
+    $('#week-by').textContent = "Planned from what's in, using food that goes off first";
+    return;
+  }
+  $('#week-strip').innerHTML = weekStrip(r.week.map((m, i) => m || rulePlan[i] || null));
+  $('#week-by').innerHTML = `✨ Planned by ${esc(r.by)} <button class="btn ghost sm" data-ai-refresh="meals">Ask again</button>`;
+}
+
+// ---------- AI suggestions ----------
+// Every suggestion starts from the app's own rules and shows at once. When an AI is set up
+// (and "Use AI for suggestions" is on), the page then asks the AI and swaps its answer in.
+// If the AI can't help, the rules' suggestions stay, with a note saying so.
+async function aiSuggest(area, params = {}, { refresh = false } = {}) {
+  const ai = state.ai || (state.ai = await api('/ai/settings'));
+  if (!ai.suggestions) return null;
+  const page = state.page;
+  try {
+    const r = await api('/ai/suggest/' + area, { method: 'POST', body: { ...params, refresh } });
+    return state.page === page ? r : null;
+  } catch (e) {
+    return state.page === page ? { error: e.message } : null;
+  }
+}
+const aiByline = (r) => r && !r.error ? `<span class="pill blue" title="Suggested by ${esc(r.by)}">✨ AI</span>` : '';
+const aiNote = (r, what) => r?.error ? `<p class="hint" style="margin-top:8px">The AI couldn't help just now (${esc(r.error)}), so these ${what} come from the app's own rules.</p>` : '';
 
 // ---------- food ----------
 async function renderFood() {
@@ -374,7 +407,14 @@ async function renderFood() {
     <div id="food-body"></div>`;
   const body = $('#food-body');
   if (state.foodView === 'pantry') body.innerHTML = pantryView(items, stats);
-  else if (state.foodView === 'meals') body.innerHTML = aiIdeasCard() + mealsView(meals.meals);
+  else if (state.foodView === 'meals') {
+    body.innerHTML = aiIdeasCard() + mealsView(meals.meals);
+    if (ai.suggestions) {
+      $('#meals-ai-status').innerHTML = '<p class="hint">✨ Asking the AI what to cook next…</p>';
+      const r = await aiSuggest('meals');
+      if (r && $('#food-body') && state.foodView === 'meals') body.innerHTML = aiIdeasCard() + mealsView(meals.meals, r);
+    }
+  }
   else body.innerHTML = recipesView(recipes);
 }
 
@@ -469,7 +509,11 @@ function aiIdeasCard() {
   </div>`;
 }
 
-function mealsView(meals) {
+function mealsView(meals, ai = null) {
+  // With AI picks, the AI's choices come first, each saying why.
+  const picks = ai && !ai.error ? ai.picks : [];
+  const why = new Map(picks.map((p) => [p.id, p.why]));
+  if (picks.length) meals = [...picks.map((p) => meals.find((m) => m.id === p.id)).filter(Boolean), ...meals.filter((m) => !why.has(m.id))];
   const filters = [['all', 'All'], ['ready', 'Ready now'], ['favourites', '⭐ Favourites'], ['quick', 'Under 20 min'], ['vegetarian', 'Vegetarian'], ['expiring', 'Uses food going off']];
   const f = state.mealFilter;
   const shown = meals.filter((m) =>
@@ -488,7 +532,8 @@ function mealsView(meals) {
             <div class="meta"><span>${icon('clock')} ${m.minutes} min</span><span>${m.tags.filter((t) => t !== 'vegetarian').map(esc).join(' · ')}</span></div></div>
           <button class="icon-btn star ${m.favourite ? 'on' : ''}" data-fav="${m.id}" data-state="${m.favourite}" aria-label="${m.favourite ? 'Remove from' : 'Add to'} favourites" title="Family favourite">${m.favourite ? '★' : '☆'}</button>
         </div>
-        <div class="chips">${tag}${m.usesExpiring ? '<span class="pill warn">Uses food going off</span>' : ''}${m.diet.filter((d) => d !== 'nut-free').map((d) => `<span class="pill plain">${DIET_LABEL[d]}</span>`).join('')}</div>
+        ${why.has(m.id) ? `<div class="small" style="color:var(--accent);font-weight:600">✨ ${esc(why.get(m.id))}</div>` : ''}
+        <div class="chips">${why.has(m.id) ? '<span class="pill blue">✨ AI pick</span>' : ''}${tag}${m.usesExpiring ? '<span class="pill warn">Uses food going off</span>' : ''}${m.diet.filter((d) => d !== 'nut-free').map((d) => `<span class="pill plain">${DIET_LABEL[d]}</span>`).join('')}</div>
         ${m.missing.length ? `<div class="small">Missing: <strong>${m.missing.map(esc).join(', ')}</strong></div>` : ''}
         ${m.short.length ? `<div class="small">Short: ${m.short.map((s) => `${esc(s.name)} (${s.have}/${s.need} ${s.unit})`).join(', ')}</div>` : ''}
         <details><summary>Ingredients for your family</summary>
@@ -501,6 +546,7 @@ function mealsView(meals) {
       </div>`;
   };
   return `
+    <div id="meals-ai-status">${picks.length ? `<p class="hint" style="margin-bottom:10px">✨ Ordered by ${esc(ai.by)}: what to cook next comes first. <button class="btn ghost sm" data-ai-refresh="meals">Ask again</button></p>` : aiNote(ai, 'meals')}</div>
     <div class="chips" style="margin-bottom:16px">${filters.map(([k, l]) => `<button class="chip ${f === k ? 'active' : ''}" data-meal-filter="${k}">${l}</button>`).join('')}</div>
     ${shown.length ? `<div class="meal-grid">${shown.map(card).join('')}</div>` : `<div class="card">${emptyState('🍽️', f === 'favourites' ? 'Tap the ☆ on a meal the kids love to make it a favourite.' : 'No meals match yet. Add more food to the cupboard.')}</div>`}`;
 }
@@ -648,12 +694,9 @@ async function renderClothes() {
             ? `<div class="small" style="margin-top:6px">${weather.rain ? '🌧️' : weather.tempC < 12 ? '🧣' : weather.tempC >= 20 ? '☀️' : '⛅'} ${weather.min}° to ${weather.max}°${weather.place ? ' in ' + esc(weather.place) : ''}. ${esc(ootd.weather || '')}</div>`
             : state.family.location ? `<div class="small muted" style="margin-top:6px">Couldn't get the weather for ${esc(state.family.location.name)} right now, so this ignores it.</div>`
             : `<div class="small muted" style="margin-top:6px"><button class="btn ghost sm" data-nav="settings" style="padding:0">Add your town</button> for weather-aware outfits.</div>`}
-          ${o ? `<div class="ootd-items">${o.items.map((i) => `
-              <div class="garment"><div class="tile" style="background:${esc(cssColour(i.colour))}">${GARMENT[i.type] || '👕'}</div>${esc(i.name)}</div>`).join('')}</div>
-              ${o.notes.length ? `<p class="small muted" style="margin-top:8px">${o.notes.map(esc).join('; ')}</p>` : ''}`
-            : '<p style="margin-top:12px">Add at least a top and a bottom (or a dress) that fit and are clean to get an outfit.</p>'}
+          <div id="ootd-body">${ootdBody(o)}</div>
         </div>
-        ${o && ootd.choices > 1 ? `<button class="btn" data-shuffle>${icon('shuffle')} Shuffle</button>` : ''}
+        <span id="ootd-shuffle">${o && ootd.choices > 1 ? `<button class="btn" data-shuffle>${icon('shuffle')} Shuffle</button>` : ''}</span>
       </div>
       ${kidCard(s, kids.indexOf(child))}
     </div>
@@ -721,6 +764,7 @@ async function renderClothes() {
         : emptyState('👗', 'No outfits yet for this season.')}
     </div>`;
   state.sellable = sellable;
+  if ((state.ai = await api('/ai/settings')).suggestions && o) aiOutfit(child.id, weather);
 }
 
 function listingText(it) {
@@ -767,19 +811,7 @@ async function renderShopping() {
             <button class="btn primary">${icon('plus')} Add</button>
           </form>
         </div>
-        <div class="card">
-          <div class="card-head"><h2>💡 Suggestions</h2>
-            ${data.suggestions.length ? `<button class="btn sm" data-add-all>Add all</button>` : ''}</div>
-          <p class="hint">From what runs out, what you buy regularly, the meals you cook most and your favourites. The more you add to the cupboard and tap "Cooked it", the better these get.</p>
-          ${data.suggestions.length ? `<ul class="list">${data.suggestions.map((s, i) => `
-            <li class="row">
-              <span class="emoji">${s.kind === 'food' ? foodCat(s.name).emoji : GARMENT[s.type] || '👕'}</span>
-              <div class="grow"><div class="title">${s.quantity ? s.quantity + ' × ' : ''}${esc(cap(s.name))}${s.size ? ` <span class="pill plain">${esc(s.size)}</span>` : ''}</div>
-                <div class="sub">${esc(s.reason)}</div></div>
-              <button class="btn sm" data-suggest="${i}">${icon('plus')} Add</button>
-              <button class="icon-btn" data-snooze="${i}" aria-label="Not now: ${esc(s.name)}" title="Not now">${icon('x')}</button>
-            </li>`).join('')}</ul>` : emptyState('💡', 'Nothing to suggest right now.')}
-        </div>
+        ${suggestionsCard(data.suggestions)}
       </div>
       <div class="card">
         <div class="card-head"><h2>Your list</h2></div>
@@ -789,6 +821,57 @@ async function renderShopping() {
       </div>
     </div>`;
   state.suggestions = data.suggestions;
+  if ((state.ai = await api('/ai/settings')).suggestions) aiShopping();
+}
+
+function suggestionsCard(list, ai = null) {
+  const fromAi = ai && !ai.error;
+  return `<div class="card" id="suggest-card">
+    <div class="card-head"><h2>💡 Suggestions</h2>${aiByline(ai)}
+      ${list.length ? `<button class="btn sm" data-add-all>Add all</button>` : ''}</div>
+    <p class="hint">${fromAi
+      ? `From ${esc(ai.by)}, looking at what you cook and buy, what's run out and what the kids need. <button class="btn ghost sm" data-ai-refresh="shopping">Ask again</button>`
+      : 'From what runs out, what you buy regularly, the meals you cook most and your favourites. The more you add to the cupboard and tap "Cooked it", the better these get.'}</p>
+    ${aiNote(ai, 'suggestions')}
+    <div id="suggest-ai-status"></div>
+    ${list.length ? `<ul class="list">${list.map((s, i) => `
+      <li class="row">
+        <span class="emoji">${s.kind === 'food' ? foodCat(s.name).emoji : GARMENT[s.type] || '👕'}</span>
+        <div class="grow"><div class="title">${s.quantity ? s.quantity + ' × ' : ''}${esc(cap(s.name))}${s.size ? ` <span class="pill plain">${esc(s.size)}</span>` : ''}</div>
+          <div class="sub">${s.source === 'ai' && s.childName ? `For ${esc(s.childName)} · ` : ''}${esc(s.reason)}</div></div>
+        <button class="btn sm" data-suggest="${i}">${icon('plus')} Add</button>
+        <button class="icon-btn" data-snooze="${i}" aria-label="Not now: ${esc(s.name)}" title="Not now">${icon('x')}</button>
+      </li>`).join('')}</ul>` : emptyState('💡', 'Nothing to suggest right now.')}
+  </div>`;
+}
+
+async function aiShopping(refresh = false) {
+  const status = $('#suggest-ai-status');
+  if (status) status.innerHTML = '<p class="hint">✨ Asking the AI what you might need…</p>';
+  const r = await aiSuggest('shopping', {}, { refresh });
+  if (!r || !$('#suggest-card')) return;
+  if (r.error) return void ($('#suggest-ai-status').innerHTML = aiNote(r, 'suggestions'));
+  state.suggestions = r.suggestions;
+  $('#suggest-card').outerHTML = suggestionsCard(r.suggestions, r);
+}
+
+function ootdBody(o, ai = null) {
+  return o ? `<div class="ootd-items">${o.items.map((i) => `
+      <div class="garment"><div class="tile" style="background:${esc(cssColour(i.colour))}">${GARMENT[i.type] || '👕'}</div>${esc(i.name)}</div>`).join('')}</div>
+      ${o.notes.length ? `<p class="small ${ai ? '' : 'muted'}" style="margin-top:8px${ai ? ';color:var(--accent);font-weight:600' : ''}">${ai ? '✨ ' : ''}${o.notes.map(esc).join('; ')}</p>` : ''}
+      ${ai ? `<p class="hint" style="margin-top:4px">Picked by ${esc(ai.by)}</p>` : ''}`
+    : '<p style="margin-top:12px">Add at least a top and a bottom (or a dress) that fit and are clean to get an outfit.</p>';
+}
+
+// The AI's outfits for today, cycling with Shuffle. The rules' outfit stays if it can't help.
+async function aiOutfit(childId, weather) {
+  const params = { childId };
+  if (weather && weather.tempC !== null) Object.assign(params, { tempC: weather.tempC, rain: Boolean(weather.rain) });
+  const r = await aiSuggest('outfits', params);
+  if (!r || r.error || !r.outfits.length || state.childId !== childId || !$('#ootd-body')) return;
+  const o = r.outfits[state.ootdIndex % r.outfits.length];
+  $('#ootd-body').innerHTML = ootdBody(o, r);
+  $('#ootd-shuffle').innerHTML = r.outfits.length > 1 ? `<button class="btn" data-shuffle>${icon('shuffle')} Shuffle</button>` : '';
 }
 
 // ---------- family ----------
@@ -917,6 +1000,11 @@ document.addEventListener('click', guard(async (e) => {
   }
   if (d.delShop) { await api('/shopping/items/' + d.delShop, { method: 'DELETE' }); return refresh(); }
   if (t.hasAttribute('data-clear-done')) { await api('/shopping/clear-done', { method: 'POST' }); return refresh(); }
+  if (d.aiRefresh) {
+    if (d.aiRefresh === 'shopping') return aiShopping(true);
+    await api('/ai/suggest/' + d.aiRefresh, { method: 'POST', body: { refresh: true } }).catch((e) => toast(e.message));
+    return refresh();
+  }
   if (d.snooze) {
     const s = state.suggestions[Number(d.snooze)];
     await api('/shopping/suggestions/dismiss', { method: 'POST', body: { key: s.key } });
@@ -1249,7 +1337,12 @@ async function renderSettings() {
 
     <div class="card" style="margin-top:16px">
       <div class="card-head"><h2>✨ AI helper</h2>${ai.ready ? '<span class="pill">Ready</span>' : '<span class="pill plain">Off</span>'}</div>
-      <p class="hint">AI is optional. It suggests new meals and reads photos of food, receipts and clothes. Everything else works without it.</p>
+      <p class="hint">AI is optional. Without one, the app's own rules make every suggestion. With one, it also suggests new meals and reads photos of food, receipts and clothes.</p>
+      ${ai.ready ? `<label class="banner" style="margin-top:12px;background:var(--accent-soft);color:var(--accent);cursor:pointer">
+        <input type="checkbox" data-ai-suggestions ${ai.useForSuggestions !== false ? 'checked' : ''} style="width:auto">
+        <div class="grow"><div>Use AI for suggestions</div>
+          <div class="small" style="font-weight:500">The shopping suggestions, what to cook next, the week's dinners and outfits come from the AI. Turn off to use the app's own rules.</div></div>
+      </label>` : ''}
       ${'onDeviceAvailable' in ai ? `
         <div class="banner" style="margin-top:12px;background:var(--accent-soft);color:var(--accent)">
           <span style="font-size:22px">📱</span>
@@ -1558,6 +1651,12 @@ document.addEventListener('click', guard(async (e) => {
 
 document.addEventListener('change', guard(async (e) => {
   const el = e.target;
+  if (el.matches('[data-ai-suggestions]')) {
+    await api('/ai/settings', { method: 'PUT', body: { useForSuggestions: el.checked } });
+    state.ai = null;
+    toast(el.checked ? 'Suggestions now come from the AI' : "Suggestions now come from the app's own rules");
+    return renderSettings();
+  }
   if (el.matches('[data-ondevice]')) {
     await api('/ai/settings', { method: 'PUT', body: { onDevice: el.checked } });
     return renderSettings();
