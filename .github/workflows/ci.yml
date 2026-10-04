@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions: { contents: read, statuses: write }
+    env: { GH_TOKEN: '${{ github.token }}' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,7 +34,10 @@ jobs:
           set -o pipefail
           for t in test test:e2e test:web test:account; do
             echo "::notice::starting npm run $t"
-            npm run $t 2>&1 | sed -u -e '/✓\|Error\|error\|passed/s/^/::warning::/'
+            npm run $t 2>&1 | while IFS= read -r line; do
+              echo "$line"
+              case "$line" in *✓*|*rror*) gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=pending -f context=progress -f description="$(printf '%s' "$line" | cut -c1-130)" >/dev/null || true ;; esac
+            done
           done
 
   # After the tests pass on main, publish the home screen version to Amplify.
