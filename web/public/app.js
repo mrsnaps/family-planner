@@ -1582,7 +1582,8 @@ function accountCard() {
           <button class="btn" data-account="sync">${icon('upload')} Save now</button>
           <button class="btn ghost" data-account="signout">Sign out</button>
         </div>
-        ${householdBlock()}` : `
+        ${householdBlock()}
+        <p class="small" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><button class="btn ghost sm" data-account="delete" style="color:var(--coral)">Delete my account</button></p>` : `
         <p class="hint" style="margin-top:8px">Sign in to save your family's data online, so it's safe and the same on your iPhone and iPad. Everyone in the family can have their own login and share one household.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <button class="btn primary" data-account="signin">Sign in</button>
@@ -1597,12 +1598,12 @@ const emailField = (v) => field('email', 'Email', 'email', v, 'autocomplete="use
 const codeField = () => field('code', 'Code from the email', 'text', '', 'autocomplete="one-time-code" inputmode="numeric"');
 
 // Shows a form in the dialog until the step succeeds or the person cancels.
-async function accountStep({ title, intro = '', fields, ok, run }) {
+async function accountStep({ title, intro = '', fields, ok, run, danger = false }) {
   let values = {};
   let error = '';
   for (;;) {
     const body = `${intro ? `<p class="muted">${intro}</p>` : ''}${fields(values)}${error ? `<p class="small" style="color:var(--coral);margin-top:10px">${esc(error)}</p>` : ''}`;
-    const got = await ask({ title, body, ok });
+    const got = await ask({ title, body, ok, danger });
     if (!got) return null;
     values = got;
     try {
@@ -1743,7 +1744,31 @@ async function accountLeave() {
   loadHousehold();
 }
 
+async function accountDelete() {
+  const shared = household?.shared;
+  const done = await accountStep({
+    title: 'Delete your account?',
+    intro: `This deletes your login and can't be undone. ${shared
+      ? 'The others in your household keep its lists, with your email taken off everything.'
+      : 'Your saved lists are deleted from online storage too.'}`,
+    fields: () => field('password', 'Type your password to confirm', 'password', '', 'autocomplete="current-password"') +
+      `<label class="field" style="margin-top:12px"><span><input type="checkbox" name="clear" value="yes" checked style="width:auto"> Also clear everything on this device</span></label>`,
+    ok: 'Delete account',
+    danger: true,
+    run: async (v) => {
+      if (!v.password) throw new Error('Type your password to confirm.');
+      await ACCOUNT.deleteAccount(v.password, { clearDevice: v.clear === 'yes' });
+    },
+  });
+  if (!done) return;
+  household = null;
+  toast('Your account has been deleted');
+  if (done.clear === 'yes') location.reload();
+  else await refresh();
+}
+
 async function accountAction(what) {
+  if (what === 'delete') return accountDelete();
   if (what === 'invite') return accountInvite();
   if (what === 'name') {
     const got = await ask({ title: 'Your name on the list', body: '<p class="muted">Shown next to things you add, so everyone knows who asked for what.</p>' + field('name', 'Name', 'text', personName(ACCOUNT.status().email), 'autocomplete="given-name"'), ok: 'Save' });
@@ -1791,6 +1816,7 @@ if (ACCOUNT) {
   window.addEventListener('familyplanner:datachanged', (e) => {
     if ($('#dialog').open) return;
     const reason = e.detail?.reason;
+    if (reason === 'deleted') return; // the account was just deleted; accountDelete takes it from here
     // Live updates while the app is open are quiet, and wait while someone is typing.
     if (reason === 'live' || reason === 'merged') {
       if (document.activeElement?.closest?.('#page form')) return;

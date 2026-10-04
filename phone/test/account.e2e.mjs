@@ -231,6 +231,23 @@ try {
   assert.deepEqual(await pantry(c), ['beans', 'milk', 'pasta', 'rice']);
   ok('the demo stays on the device: nothing is saved online, and the real lists come back');
 
+  // Deleting an account needs the password, removes the login and its online lists, and
+  // (by default) clears the device. Everyone else's lists are left alone.
+  const others = JSON.stringify(cloud.data(EMAIL));
+  await d.page.click('[data-nav="settings"]:visible');
+  await d.page.click('[data-account="delete"]');
+  await d.fill({ password: 'wrong-pass1' }, 'Delete account');
+  await d.page.waitForSelector('#dialog-form :text("That password isn\'t right")');
+  assert.ok(cloud.hasUser('partner@example.com'));
+  await d.fill({ password: 'partner123' }, 'Delete account');
+  await d.page.waitForFunction(() => !window.FamilyPlannerAccount?.status().signedIn && document.querySelector('#page')?.children.length > 0, null, { timeout: 5000 });
+  await d.page.waitForLoadState('load');
+  assert.equal(cloud.hasUser('partner@example.com'), false);
+  assert.equal(cloud.data('partner@example.com'), null);
+  assert.deepEqual(await pantry(d), []);
+  assert.equal(JSON.stringify(cloud.data(EMAIL)), others);
+  ok('deleting an account asks for the password, removes it online and clears the device');
+
   for (const x of [a, b, c, d]) assert.deepEqual(x.errors, []);
   ok('no page errors');
 } finally {

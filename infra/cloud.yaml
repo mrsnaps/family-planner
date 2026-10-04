@@ -67,13 +67,15 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:DeleteObjectVersion]
                 Resource:
                   - !Sub '${DataBucket.Arn}/households/*'
                   - !Sub '${DataBucket.Arn}/members/*'
                   - !Sub '${DataBucket.Arn}/invites/*'
               # Lets a missing file read as "not found" instead of "access denied".
-              - { Effect: Allow, Action: s3:ListBucket, Resource: !GetAtt DataBucket.Arn }
+              # Listing old versions and invite codes lets "Delete my account" remove everything.
+              - { Effect: Allow, Action: [s3:ListBucket, s3:ListBucketVersions], Resource: !GetAtt DataBucket.Arn }
+              - { Effect: Allow, Action: cognito-idp:AdminDeleteUser, Resource: !GetAtt UserPool.Arn }
 
   DataFunction:
     Type: AWS::Lambda::Function
@@ -86,6 +88,7 @@ Resources:
       Environment:
         Variables:
           BUCKET: !Ref DataBucket
+          USER_POOL_ID: !Ref UserPool
           # API Gateway's own CORS settings reject the iPhone app's capacitor:// origin, so CORS is answered here.
           ORIGINS: !Sub '${AppOrigin} capacitor://localhost http://localhost:5173 http://localhost:5175'
       Code:
@@ -96,11 +99,14 @@ Resources:
           //   GET  /rev        just the saved version, for a cheap "anything new?" check
           //   GET  /household  who's in the household           POST /invite -> { code }
           //   POST /join { code }  join another household       POST /leave
+          //   POST /delete-account  removes the login and everything only this person can see
           // Each person signs in with their own email. Someone who hasn't joined a household has
           // their own, under their user id, so accounts made before households existed keep working.
-          const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+          const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+          const { CognitoIdentityProviderClient, AdminDeleteUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
           const crypto = require('crypto');
           const s3 = new S3Client({});
+          const cognito = new CognitoIdentityProviderClient({});
           const Bucket = process.env.BUCKET;
           const ORIGINS = process.env.ORIGINS.split(' ');
           const MAX = 2 * 1024 * 1024; // a busy household's data is well under this
@@ -227,6 +233,67 @@ Resources:
             if (hid !== me.sub) await s3.send(new DeleteObjectCommand({ Bucket, Key: memberKey(me.sub) }));
           }
 
+          // Removes a file and every earlier copy of it the bucket keeps (versioning), so deleted data
+          // can't be brought back.
+          async function purge(Key, keepCurrent = false) {
+            const r = await s3.send(new ListObjectVersionsCommand({ Bucket, Prefix: Key }));
+            const all = [...(r.Versions || []), ...(r.DeleteMarkers || [])].filter((v) => v.Key === Key && !(keepCurrent && v.IsLatest));
+            for (const v of all) await s3.send(new DeleteObjectCommand({ Bucket, Key, VersionId: v.VersionId }));
+          }
+
+          // Takes an email out of shared data: values equal to it (like "added by") and keys named after it
+          // (like the shopping list's names). The rest of the household's data is left alone.
+          function scrub(v, email) {
+            if (Array.isArray(v)) return v.map((x) => scrub(x, email));
+            if (!v || typeof v !== 'object') return v;
+            const out = {};
+            for (const [k, x] of Object.entries(v)) {
+              if (k.toLowerCase() === email || (typeof x === 'string' && x.toLowerCase() === email)) continue;
+              out[k] = scrub(x, email);
+            }
+            return out;
+          }
+
+          // For each household this person belongs to (their own, and one they joined): if nobody else is
+          // left, its data goes; otherwise the others keep it, with this person's email taken out.
+          async function forgetHousehold(hid, me) {
+            const list = ((await getJson(peopleKey(hid))).value || []).filter((p) => p.sub !== me.sub);
+            if (!list.length) {
+              await purge(dataKey(hid));
+              await purge(peopleKey(hid));
+              return;
+            }
+            await putJson(peopleKey(hid), list);
+            await purge(peopleKey(hid), true);
+            if (me.ownEmail) {
+              for (let tries = 0; tries < 3; tries++) {
+                const r = await getJson(dataKey(hid));
+                if (!r.value) break;
+                try {
+                  await putJson(dataKey(hid), scrub(r.value, me.ownEmail.toLowerCase()), { IfMatch: r.rev });
+                  break;
+                } catch (e) {
+                  if (!e.$metadata || e.$metadata.httpStatusCode !== 412) throw e;
+                }
+              }
+              await purge(dataKey(hid), true);
+            }
+          }
+
+          routes['POST /delete-account'] = async (me) => {
+            const hid = await householdOf(me.sub);
+            for (const h of new Set([hid, me.sub])) await forgetHousehold(h, me);
+            await purge(memberKey(me.sub));
+            // Invite codes this person made (they'd stop working anyway, but they hold their email).
+            const inv = await s3.send(new ListObjectsV2Command({ Bucket, Prefix: 'invites/' }));
+            for (const o of inv.Contents || []) {
+              const i = (await getJson(o.Key)).value;
+              if (i && i.bySub === me.sub) await purge(o.Key);
+            }
+            await cognito.send(new AdminDeleteUserCommand({ UserPoolId: process.env.USER_POOL_ID, Username: me.username }));
+            return { ok: true };
+          };
+
           exports.handler = async (event) => {
             const origin = event.headers && event.headers.origin;
             cors = ORIGINS.includes(origin) ? { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': 'GET,PUT,POST', 'access-control-max-age': '3600', vary: 'origin' } : {};
@@ -237,7 +304,7 @@ Resources:
             const claims = event.requestContext.authorizer.jwt.claims;
             // An email that hasn't been confirmed isn't shown to the household as who someone is.
             const verified = claims.email_verified === true || claims.email_verified === 'true';
-            const me = { sub: claims.sub, email: (verified && claims.email) || null };
+            const me = { sub: claims.sub, email: (verified && claims.email) || null, username: claims['cognito:username'] || claims.sub, ownEmail: claims.email || null };
             const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString() : event.body || '';
             if (raw.length > MAX) return reply(413, { error: 'Too much data to save' });
             let body = null;

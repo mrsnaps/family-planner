@@ -89,6 +89,12 @@ export async function startMockCloud(port) {
         people.get(inv.household).push(email);
         return send(res, 200, { ok: true, invitedBy: inv.by });
       }
+      if (req.url === '/delete-account') {
+        leave(email);
+        if (!people.get(email)?.length) files.delete(email);
+        users.delete(email);
+        return send(res, 200, { ok: true });
+      }
       if (req.url === '/leave') {
         if (hid === email) return send(res, 400, { error: "You're not in anyone else's household." });
         leave(email);
@@ -109,6 +115,7 @@ export async function startMockCloud(port) {
   return {
     url: `http://localhost:${port}`,
     calls,
+    hasUser: (email) => users.has(email),
     data: (email) => (files.get(home(email)) ? JSON.parse(files.get(home(email)).body) : null),
     close: () => server.close(),
   };

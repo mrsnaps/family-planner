@@ -320,9 +320,34 @@ export function createAccount(store) {
     return status();
   }
 
+  // Deletes the login and the online data only this person can see (infra/lambda/index.js
+  // POST /delete-account). The password is asked again so a phone left unlocked can't do it.
+  async function deleteAccount(password, { clearDevice = true } = {}) {
+    signedIn();
+    let r;
+    try {
+      r = await cognito('InitiateAuth', { AuthFlow: 'USER_PASSWORD_AUTH', AuthParameters: { USERNAME: session.email, PASSWORD: String(password || '') } });
+    } catch (e) {
+      throw e.code === 'NotAuthorizedException' ? new AccountError('Password', "That password isn't right.") : e;
+    }
+    if (!r.AuthenticationResult) throw new AccountError(r.ChallengeName);
+    useTokens(r.AuthenticationResult);
+    await settle();
+    clearTimeout(timer);
+    await api('POST', {}, '/delete-account');
+    await forget();
+    if (clearDevice) {
+      for (const k of Object.keys(store.data)) delete store.data[k];
+      await saveData(store.data);
+      emit('familyplanner:datachanged', { reason: 'deleted' });
+    }
+    return status();
+  }
+
   return {
     status,
     syncNow: () => syncNow(),
+    deleteAccount,
     check,
     household,
     invite,

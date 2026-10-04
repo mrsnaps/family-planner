@@ -11,9 +11,16 @@ const fakeS3 = {
   HeadObjectCommand: class extends Cmd {},
   PutObjectCommand: class extends Cmd {},
   DeleteObjectCommand: class extends Cmd {},
+  ListObjectVersionsCommand: class extends Cmd {},
+  ListObjectsV2Command: class extends Cmd {},
   S3Client: class {
     async send(cmd) {
       const { Key } = cmd.input;
+      // One version per file here: the current one.
+      if (cmd instanceof fakeS3.ListObjectVersionsCommand) {
+        return { Versions: [...files.keys()].filter((k) => k.startsWith(cmd.input.Prefix)).map((k) => ({ Key: k, VersionId: 'now', IsLatest: true })) };
+      }
+      if (cmd instanceof fakeS3.ListObjectsV2Command) return { Contents: [...files.keys()].filter((k) => k.startsWith(cmd.input.Prefix)).map((k) => ({ Key: k })) };
       const f = files.get(Key);
       if (cmd instanceof fakeS3.GetObjectCommand) {
         if (!f) throw Object.assign(new Error('missing'), { name: 'NoSuchKey' });
@@ -34,9 +41,19 @@ const fakeS3 = {
     }
   },
 };
+const deletedUsers = [];
+const fakeCognito = {
+  AdminDeleteUserCommand: class extends Cmd {},
+  CognitoIdentityProviderClient: class { async send(cmd) { deletedUsers.push(cmd.input); return {}; } },
+};
 const load = Module._load;
-Module._load = function (req, ...rest) { return req === '@aws-sdk/client-s3' ? fakeS3 : load.call(this, req, ...rest); };
+Module._load = function (req, ...rest) {
+  if (req === '@aws-sdk/client-s3') return fakeS3;
+  if (req === '@aws-sdk/client-cognito-identity-provider') return fakeCognito;
+  return load.call(this, req, ...rest);
+};
 process.env.BUCKET = 'test';
+process.env.USER_POOL_ID = 'pool';
 process.env.ORIGINS = 'https://app.example';
 const { handler } = require('../lambda/index.js');
 
@@ -137,4 +154,39 @@ test('CORS, unknown routes and bad bodies', async () => {
   assert.equal((await call('mum', 'GET', '/nope')).status, 404);
   assert.equal((await call('mum', 'PUT', '/data', [])).status, 400);
   assert.equal((await call('mum', 'POST', '/join', { code: 'abc' })).status, 400);
+});
+
+test('deleting an account takes the person out and leaves the others their data', async () => {
+  // Mum set up the household; gran is in it too. Gran's name is on things she added.
+  await save('mum', { shopping: { items: [{ name: 'tea', addedBy: 'gran@example.com' }, { name: 'milk', addedBy: 'mum@example.com' }], people: { 'gran@example.com': 'Gran' } } });
+  const inv = await call('gran', 'POST', '/invite');
+  assert.equal((await call('gran', 'POST', '/delete-account')).status, 200);
+  assert.deepEqual(deletedUsers.at(-1), { UserPoolId: 'pool', Username: 'gran' });
+  assert.deepEqual((await call('mum', 'GET', '/household')).body.members.map((m) => m.email), ['mum@example.com']);
+  const left = (await call('mum', 'GET', '/data')).body.data;
+  assert.deepEqual(left.shopping, { items: [{ name: 'tea' }, { name: 'milk', addedBy: 'mum@example.com' }], people: {} });
+  assert.equal(JSON.stringify([...files.values()]).includes('gran@'), false);
+  assert.equal(files.has(`invites/${inv.body.code}.json`), false);
+  assert.equal([...files.keys()].some((k) => k.includes('gran')), false);
+});
+
+test('deleting the last person in a household removes its data', async () => {
+  await call('solo', 'PUT', '/data', { data: { pantry: ['beans'] } });
+  await call('solo', 'POST', '/invite');
+  assert.equal((await call('solo', 'POST', '/delete-account')).status, 200);
+  assert.equal([...files.keys()].some((k) => k.includes('solo')), false);
+  assert.equal(JSON.stringify([...files.values()]).includes('solo@'), false);
+  assert.deepEqual((await call('solo', 'GET', '/data')).body.data, null);
+});
+
+test('when the person who set up a household deletes their account, the others keep it', async () => {
+  await call('dad', 'POST', '/join', { code: (await call('mum', 'POST', '/invite')).body.code });
+  const before = (await call('dad', 'GET', '/data')).body.data;
+  assert.equal((await call('mum', 'POST', '/delete-account')).status, 200);
+  assert.deepEqual((await call('dad', 'GET', '/data')).body.data.shopping.items.map((i) => i.name), before.shopping.items.map((i) => i.name));
+  assert.deepEqual((await call('dad', 'GET', '/household')).body.members, [{ email: 'dad@example.com', you: true }]);
+  assert.equal(JSON.stringify([...files.values()]).includes('mum@'), false);
+  // Dad can still save, and can still invite someone new.
+  assert.equal((await save('dad', { pantry: ['eggs'] })).status, 200);
+  assert.equal((await call('dad', 'POST', '/invite')).status, 200);
 });
