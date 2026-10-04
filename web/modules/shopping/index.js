@@ -5,7 +5,7 @@
 // Ticking an item as bought puts it in the pantry or the child's wardrobe.
 const { newId } = require('../../lib/store');
 const { habitSuggestions, usuals, lastShop, norm } = require('./habits');
-const { HttpError } = require('../../lib/http');
+const { HttpError, text } = require('../../lib/http');
 
 const DEFAULT = { items: [] };
 const SNOOZE_DAYS = 14; // "Not now" hides a suggestion for this long
@@ -64,7 +64,7 @@ const keyOf = (i) => [i.kind, i.kind === 'food' ? norm(i.name) : String(i.name).
 function clean(input, existing = {}) {
   const it = { ...existing };
   for (const k of ['name', 'unit', 'childId', 'size', 'type', 'kind', 'note']) {
-    if (input[k] !== undefined) it[k] = input[k] === null || input[k] === '' ? null : String(input[k]).trim();
+    if (input[k] !== undefined) it[k] = input[k] === null || input[k] === '' ? null : text(input[k], k === 'note' ? 200 : k === 'name' ? 80 : 40);
   }
   if (input.quantity !== undefined) {
     const q = input.quantity === '' || input.quantity === null ? null : Number(input.quantity);
@@ -174,7 +174,7 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
 
   // "Not now": hide a suggestion for a while. It comes back if it's still true later.
   router.post('/api/v1/shopping/suggestions/dismiss', (req, body) => {
-    if (!body || typeof body.key !== 'string' || !body.key) throw new HttpError(400, 'Which suggestion? (key)');
+    if (!body || typeof body.key !== 'string' || !body.key || body.key.length > 200) throw new HttpError(400, 'Which suggestion? (key)');
     const d = dismissed();
     const now = Date.now();
     for (const [k, until] of Object.entries(d)) if (new Date(until) < now) delete d[k];

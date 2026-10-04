@@ -4,7 +4,7 @@
 // so the phone app can run the same task with on-device AI (Apple Foundation Models)
 // and save the results through the normal bulk endpoints.
 const { HttpError } = require('../../lib/http');
-const { PRESETS, presetFor, callProvider } = require('./providers');
+const { PRESETS, presetFor, callProvider, keyTarget, usableKey } = require('./providers');
 const { TYPES } = require('../clothes/engine');
 const SUGGEST = require('./suggest');
 
@@ -139,12 +139,13 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
     return s;
   };
   const publicSettings = () => {
-    const { apiKey, ...rest } = settings();
+    const { apiKey, keyFor, ...rest } = settings();
     const preset = presetFor(rest.provider);
+    const key = usableKey(settings());
     return {
       ...rest,
-      hasKey: Boolean(apiKey) || (preset?.format === 'anthropic' ? Boolean(process.env.ANTHROPIC_API_KEY) : Boolean(process.env.AI_API_KEY)),
-      apiKeyHint: apiKey ? `…${apiKey.slice(-4)}` : null,
+      hasKey: Boolean(key),
+      apiKeyHint: apiKey && key === apiKey ? `…${apiKey.slice(-4)}` : null,
       ready: rest.provider !== 'none' && Boolean(preset),
     };
   };
@@ -206,7 +207,10 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
       if (u && !/^https?:\/\//.test(u)) throw new HttpError(400, 'Server address must start with http:// or https://');
       s.baseUrl = u;
     }
-    if (body.apiKey !== undefined) s.apiKey = String(body.apiKey || '').trim();
+    if (body.apiKey !== undefined) {
+      s.apiKey = String(body.apiKey || '').trim();
+      s.keyFor = s.apiKey ? keyTarget(s) : undefined;
+    }
     if (body.onDevice !== undefined) s.onDevice = Boolean(body.onDevice);
     if (body.useForSuggestions !== undefined) s.useForSuggestions = Boolean(body.useForSuggestions);
     if (body.monthlyLimit !== undefined) {

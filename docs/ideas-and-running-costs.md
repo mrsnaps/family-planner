@@ -48,7 +48,7 @@ They're grouped by effort. Within each group, the ideas near the top give the mo
 - **Accounts and households.** Every record needs to belong to a household, and every request needs to check who's asking. This is the biggest single change.
 - **Real database.** Replace `lib/store.js` (one JSON file, rewritten on every save) with Postgres. The store is already kept separate, so this is a contained change.
 - **Children's data is personal data.** The app stores children's names and birth dates, so UK GDPR applies: privacy notice, a way to delete an account, data kept in the UK or EU, and encrypted backups.
-- **Security basics.** The API currently allows requests from any website (open CORS). Once there are logins this needs locking down, plus rate limiting and HTTPS.
+- **Security basics.** Done: the self-hosted API only answers its own pages (set `CORS_ORIGINS` to let another front end in), the online API only answers the app's own addresses, and the page refuses to run any script but its own.
 
 ---
 

@@ -99,18 +99,41 @@ async function callOpenAICompatible({ baseUrl, apiKey, model }, { system, text, 
   return extractJson(typeof out === 'string' ? out : out.map((p) => p.text || '').join(''));
 }
 
+// A saved key only goes to the server it was typed in for. If the AI's address is changed
+// later (by an imported backup, someone else in the household, or a page that shouldn't be
+// talking to this app), the key isn't sent there; it has to be typed in again.
+const keyTarget = (settings, preset = presetFor(settings.provider)) =>
+  preset ? `${preset.id} ${(settings.baseUrl || preset.baseUrl || '').replace(/\/+$/, '')}` : '';
+
+function usableKey(settings) {
+  const preset = presetFor(settings.provider);
+  if (!preset) return '';
+  const target = keyTarget(settings, preset);
+  if (settings.apiKey) {
+    // Keys saved before this check have no keyFor: trust them only at the preset's own address.
+    const ok = settings.keyFor ? settings.keyFor === target : !settings.baseUrl || settings.baseUrl === preset.baseUrl;
+    return ok ? settings.apiKey : '';
+  }
+  // A key from the server's environment (self-hosting) only goes to the preset's own address.
+  if (settings.baseUrl && settings.baseUrl !== preset.baseUrl) return '';
+  return (preset.format === 'anthropic' ? process.env.ANTHROPIC_API_KEY : process.env.AI_API_KEY) || '';
+}
+
 function callProvider(settings, request) {
   const preset = presetFor(settings.provider);
   if (!preset) throw Object.assign(new Error('No AI is set up. Choose one in Settings.'), { status: 409 });
   const cfg = {
     baseUrl: settings.baseUrl || preset.baseUrl,
-    apiKey: settings.apiKey || (preset.format === 'anthropic' ? process.env.ANTHROPIC_API_KEY : process.env.AI_API_KEY) || '',
+    apiKey: usableKey(settings),
     model: settings.model || preset.models[0],
   };
   if (!cfg.baseUrl) throw Object.assign(new Error('Add the server address in AI settings.'), { status: 409 });
   if (!cfg.model) throw Object.assign(new Error('Choose a model in AI settings.'), { status: 409 });
-  if (preset.needsKey && !cfg.apiKey) throw Object.assign(new Error('Add an API key in AI settings.'), { status: 409 });
+  if (preset.needsKey && !cfg.apiKey) {
+    const moved = settings.apiKey ? ' The AI\'s address has changed since the key was saved, so type the key in again.' : '';
+    throw Object.assign(new Error(`Add an API key in AI settings.${moved}`), { status: 409 });
+  }
   return preset.format === 'anthropic' ? callAnthropic(cfg, request) : callOpenAICompatible(cfg, request);
 }
 
-module.exports = { PRESETS, presetFor, callProvider, extractJson, parseDataUrl };
+module.exports = { PRESETS, presetFor, callProvider, keyTarget, usableKey, extractJson, parseDataUrl };

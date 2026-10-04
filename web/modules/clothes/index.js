@@ -1,6 +1,6 @@
 // Clothes module: HTTP routes over the engine. Owns the "clothes" key in the store.
 const { newId } = require('../../lib/store');
-const { HttpError } = require('../../lib/http');
+const { HttpError, text } = require('../../lib/http');
 const { TYPES, DEFAULT_TARGETS, DEFAULT_PRICES, outfitsFor, outfitOfTheDay, childStats, handMeDowns } = require('./engine');
 const { normalise, BANDS } = require('./sizes');
 
@@ -9,7 +9,7 @@ const DEFAULT = { items: [], targets: DEFAULT_TARGETS, prices: DEFAULT_PRICES };
 function cleanItem(input, existing = {}, children) {
   const it = { ...existing };
   for (const k of ['name', 'colour', 'size', 'childId', 'type', 'pattern', 'season']) {
-    if (input[k] !== undefined) it[k] = input[k] === null ? null : String(input[k]).trim();
+    if (input[k] !== undefined) it[k] = input[k] === null ? null : text(input[k], k === 'name' ? 80 : 40);
   }
   if (input.wornOut !== undefined) it.wornOut = Boolean(input.wornOut);
   if (input.inWash !== undefined) it.inWash = Boolean(input.inWash);

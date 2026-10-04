@@ -336,6 +336,34 @@ try {
     ok('with an AI on, it shares out the chores and suggests new ones');
     await ctx.close();
   }
+  // 7. Booby-trapped data (from a backup file, or saved by someone else in the household)
+  // is shown as text on every page, never turned into page code.
+  {
+    const { ctx, page, api } = await open();
+    const X = '"><b class="pwned">x</b><x a="';
+    const today = new Date().toISOString().slice(0, 10);
+    const data = {
+      family: { adults: 2, dietary: [], children: [{ id: 'k' + X, name: 'Sam' + X, birthDate: '2018-01-01', clothingSize: '7-8Y', shoeSize: '1' + X }] },
+      food: {
+        pantry: [{ id: 'p' + X, name: 'Rice' + X, quantity: X, unit: X, expiry: today }],
+        recipes: [{ id: 'r' + X, name: 'Rice bowl' + X, servings: X, minutes: X, tags: ['dinner' + X], ingredients: [{ name: 'rice', qty: 1, unit: X }], steps: [X] }],
+        favourites: ['r' + X],
+      },
+      clothes: { items: [{ id: 'c' + X, childId: 'k' + X, name: 'Tee' + X, type: 'top', colour: 'blue' + X, size: '7-8Y', pattern: 'plain', season: 'all' }, { id: 'c2' + X, childId: 'k' + X, name: 'Odd' + X, type: X, size: X }], targets: { top: X }, prices: { top: X } },
+      shopping: { items: [{ id: 's' + X, name: 'Milk' + X, kind: 'food', quantity: X, unit: X, note: X, done: false, addedBy: X }], people: { [X]: X }, spending: [{ id: 'm' + X, amount: 5, date: today, shop: X, addedBy: X }] },
+      chores: { list: [{ id: 'h' + X, name: 'Bins' + X, emoji: X, every: X, effort: 1, minAge: X, who: null }], log: [{ id: 'l' + X, choreId: 'h' + X, name: X, by: X, effort: 1, at: new Date().toISOString() }], adults: [{ id: 'a' + X, name: 'Mum' + X }], perPoint: X, dismissed: {} },
+    };
+    assert.equal((await api('/import', 'POST', { app: 'family-planner', data })).status, 200);
+    for (const nav of ['home', 'food', 'clothes', 'shopping', 'chores', 'family', 'settings']) {
+      // (Clicked from code: the long test strings can push things about on screen.)
+      await page.evaluate((n) => document.querySelector(`#tabbar [data-nav="${n}"]`).click(), nav);
+      await page.waitForFunction((n) => document.querySelector('#page-title')?.textContent && document.querySelector(`#tabbar [data-nav="${n}"]`)?.classList.contains('active'), nav);
+      await page.waitForTimeout(300);
+      assert.equal(await page.locator('.pwned').count(), 0, `page code injected on ${nav}`);
+    }
+    ok('text from saved or imported data never becomes page code');
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();

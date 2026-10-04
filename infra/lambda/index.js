@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const s3 = new S3Client({});
 const Bucket = process.env.BUCKET;
 const ORIGINS = process.env.ORIGINS.split(' ');
-const MAX = 5 * 1024 * 1024;
+const MAX = 2 * 1024 * 1024; // a busy household's data is well under this
 const INVITE_DAYS = 7;
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I mix-ups
 
@@ -93,15 +93,26 @@ const routes = {
     if (!(await getJson(peopleKey(hid))).value) await putJson(peopleKey(hid), [{ sub: me.sub, email: me.email, joinedAt: new Date().toISOString() }]);
     const code = Array.from(crypto.randomBytes(8), (b) => CODE_CHARS[b % CODE_CHARS.length]).join('');
     const expires = new Date(Date.now() + INVITE_DAYS * 86400000).toISOString();
-    await putJson(inviteKey(code), { householdId: hid, by: me.email, expires });
+    await putJson(inviteKey(code), { householdId: hid, by: me.email, bySub: me.sub, expires });
     return { code, expires, days: INVITE_DAYS };
   },
   async 'POST /join'(me, body) {
     const code = String((body && body.code) || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (code.length !== 8) throw fail(400, 'Invite codes are 8 letters and numbers.');
     const inv = (await getJson(inviteKey(code))).value;
-    if (!inv || new Date(inv.expires) < new Date()) throw fail(404, "That code isn't right or has expired. Ask for a new one.");
+    const gone = () => fail(404, "That code isn't right or has expired. Ask for a new one.");
+    if (!inv || !(new Date(inv.expires) > new Date())) throw gone();
     if (inv.householdId === (await householdOf(me.sub))) return { ok: true, already: true };
+    // The code only works while the person who made it is still in that household.
+    if (inv.bySub) {
+      const list = (await getJson(peopleKey(inv.householdId))).value || [];
+      if (!list.some((p) => p.sub === inv.bySub)) {
+        await s3.send(new DeleteObjectCommand({ Bucket, Key: inviteKey(code) }));
+        throw gone();
+      }
+    }
+    // Each code lets one person in, so a code that gets passed around can't be reused.
+    await s3.send(new DeleteObjectCommand({ Bucket, Key: inviteKey(code) }));
     await leave(me);
     await putJson(memberKey(me.sub), { householdId: inv.householdId, joinedAt: new Date().toISOString() });
     await addPerson(inv.householdId, me);
@@ -132,7 +143,9 @@ exports.handler = async (event) => {
   const route = routes[`${method} ${event.rawPath}`];
   if (!route) return reply(404, { error: 'Not found' });
   const claims = event.requestContext.authorizer.jwt.claims;
-  const me = { sub: claims.sub, email: claims.email || null };
+  // An email that hasn't been confirmed isn't shown to the household as who someone is.
+  const verified = claims.email_verified === true || claims.email_verified === 'true';
+  const me = { sub: claims.sub, email: (verified && claims.email) || null };
   const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString() : event.body || '';
   if (raw.length > MAX) return reply(413, { error: 'Too much data to save' });
   let body = null;

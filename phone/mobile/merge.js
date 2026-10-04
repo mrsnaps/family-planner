@@ -14,6 +14,7 @@ export function merge3(base, mine, theirs) {
     const b = isObj(base) ? base : {};
     const out = {};
     for (const k of new Set([...Object.keys(theirs), ...Object.keys(mine)])) {
+      if (k === '__proto__') continue; // never part of the app's data
       const inMine = k in mine;
       const inTheirs = k in theirs;
       if (inMine && inTheirs) out[k] = merge3(b[k], mine[k], theirs[k]);

@@ -1,6 +1,6 @@
 // Food module: HTTP routes over the engine. Owns the "food" key in the store.
 const { newId } = require('../../lib/store');
-const { HttpError } = require('../../lib/http');
+const { HttpError, text } = require('../../lib/http');
 const BUILTIN = require('./recipes');
 const { suggestMeals, estimateMeals, shopForWeek, cook, UNITS } = require('./engine');
 const { suitsDiet, DIETS } = require('./diet');
@@ -12,7 +12,7 @@ const HISTORY_LIMIT = { added: 400, cooked: 200 };
 
 function cleanItem(input, existing = {}) {
   const it = { ...existing };
-  if (input.name !== undefined) it.name = String(input.name).trim();
+  if (input.name !== undefined) it.name = text(input.name, 80);
   if (!it.name) throw new HttpError(400, 'Item needs a name');
   if (input.quantity !== undefined) {
     const q = Number(input.quantity);
@@ -21,8 +21,8 @@ function cleanItem(input, existing = {}) {
     }
     it.quantity = input.quantity === null || input.quantity === '' ? null : q;
   }
-  if (input.unit !== undefined) it.unit = String(input.unit || '').trim().toLowerCase();
-  if (input.category !== undefined) it.category = String(input.category || '').trim() || null;
+  if (input.unit !== undefined) it.unit = text(input.unit, 12).toLowerCase();
+  if (input.category !== undefined) it.category = text(input.category, 40) || null;
   if (input.expiry !== undefined) {
     if (input.expiry && isNaN(new Date(input.expiry))) throw new HttpError(400, 'Bad expiry date');
     it.expiry = input.expiry || null;
@@ -31,30 +31,30 @@ function cleanItem(input, existing = {}) {
 }
 
 function cleanRecipe(input) {
-  const name = String(input.name || '').trim();
+  const name = text(input.name, 80);
   if (!name) throw new HttpError(400, 'Recipe needs a name');
-  const servings = Number(input.servings) || 4;
-  if (!Array.isArray(input.ingredients) || !input.ingredients.length) {
+  const servings = Math.min(50, Math.max(1, Math.round(Number(input.servings)) || 4));
+  if (!Array.isArray(input.ingredients) || !input.ingredients.length || input.ingredients.length > 60) {
     throw new HttpError(400, 'Recipe needs ingredients');
   }
   const ingredients = input.ingredients.map((g) => {
     const qty = Number(g.qty);
     if (!g.name || !Number.isFinite(qty) || qty <= 0) throw new HttpError(400, 'Each ingredient needs name and qty');
     return {
-      name: String(g.name).trim().toLowerCase(),
+      name: text(g.name, 80).toLowerCase(),
       qty,
-      unit: String(g.unit || 'pcs').toLowerCase(),
+      unit: text(g.unit || 'pcs', 12).toLowerCase(),
       optional: Boolean(g.optional),
-      aliases: Array.isArray(g.aliases) ? g.aliases.map(String) : [],
+      aliases: Array.isArray(g.aliases) ? g.aliases.slice(0, 10).map((a) => text(a, 80)) : [],
     };
   });
   return {
     name,
     servings,
-    minutes: Number(input.minutes) || 30,
-    tags: Array.isArray(input.tags) ? input.tags.map(String) : ['dinner'],
+    minutes: Math.min(1440, Math.max(1, Math.round(Number(input.minutes)) || 30)),
+    tags: Array.isArray(input.tags) ? input.tags.slice(0, 10).map((t) => text(t, 30)) : ['dinner'],
     ingredients,
-    steps: Array.isArray(input.steps) ? input.steps.map(String).slice(0, 30) : [],
+    steps: Array.isArray(input.steps) ? input.steps.slice(0, 30).map((t) => text(t, 500)) : [],
     builtin: false,
   };
 }

@@ -235,7 +235,7 @@ function passAllButtons(list) {
   for (const h of list) by.set(h.toChildId, { name: h.toName, n: (by.get(h.toChildId)?.n || 0) + 1, from: new Set([...(by.get(h.toChildId)?.from || []), h.fromChildId]) });
   const from = new Set(list.map((h) => h.fromChildId));
   return [...by].filter(([, v]) => v.n >= 2).map(([id, v]) =>
-    `<button class="btn sm primary" data-pass-all="${id}" ${from.size === 1 ? `data-from="${[...from][0]}"` : ''}>Pass all ${v.n} to ${esc(v.name)}</button>`).join(' ');
+    `<button class="btn sm primary" data-pass-all="${esc(id)}" ${from.size === 1 ? `data-from="${esc([...from][0])}"` : ''}>Pass all ${esc(v.n)} to ${esc(v.name)}</button>`).join(' ');
 }
 
 function kidCard(s, i, { compact = false } = {}) {
@@ -244,7 +244,7 @@ function kidCard(s, i, { compact = false } = {}) {
     let have = s.fitting[t] || 0;
     if (t === 'top' || t === 'bottom') have += s.fitting.dress + s.fitting.onesie;
     const pct = want ? Math.min(100, (have / want) * 100) : 100;
-    return `<span class="lbl">${esc(t)}</span><div class="bar ${have < want ? 'short' : ''}"><span style="width:${pct}%"></span></div><span class="val">${have}/${want}</span>`;
+    return `<span class="lbl">${esc(t)}</span><div class="bar ${have < want ? 'short' : ''}"><span style="width:${pct}%"></span></div><span class="val">${esc(have)}/${esc(want)}</span>`;
   }).join('');
   const f = s.forecast;
   const sh = s.shoeForecast;
@@ -372,7 +372,7 @@ async function renderHome() {
     ${d.handMeDowns.length ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>♻️ Hand-me-downs</h2>${passAllButtons(d.handMeDowns) || '<span class="muted small">Outgrown clothes a sibling can use</span>'}</div>
       <ul class="list">${d.handMeDowns.slice(0, 5).map((h) => `<li class="row"><span class="emoji">${GARMENT[h.type] || '👕'}</span>
         <div class="grow"><div class="title">${esc(h.name)} <span class="pill plain">${esc(h.size)}</span></div><div class="sub">${esc(h.fromName)} → ${esc(h.toName)} · ${h.fitsNow ? 'fits now' : 'to grow into'}</div></div>
-        <button class="btn sm" data-handdown="${h.itemId}" data-to="${h.toChildId}">Pass to ${esc(h.toName)}</button></li>`).join('')}</ul></div>` : ''}
+        <button class="btn sm" data-handdown="${esc(h.itemId)}" data-to="${esc(h.toChildId)}">Pass to ${esc(h.toName)}</button></li>`).join('')}</ul></div>` : ''}
 
     ${choresHomeCard(d.chores)}
 
@@ -460,12 +460,12 @@ function pantryView(items, stats) {
           <div class="sub">${it.expiry ? 'Use by ' + fmtDate(it.expiry) : 'No use-by date'}${unmatched.has(it.name) ? ' · not in any recipe yet' : ''}</div>
         </div>
         <div class="stepper">
-          <button data-step="${it.id}" data-delta="-1" aria-label="Less">−</button>
-          <input type="number" step="any" min="0" value="${it.quantity ?? ''}" data-qty="${it.id}" aria-label="Quantity of ${esc(it.name)}">
-          <button data-step="${it.id}" data-delta="1" aria-label="More">+</button>
+          <button data-step="${esc(it.id)}" data-delta="-1" aria-label="Less">−</button>
+          <input type="number" step="any" min="0" value="${esc(it.quantity)}" data-qty="${esc(it.id)}" aria-label="Quantity of ${esc(it.name)}">
+          <button data-step="${esc(it.id)}" data-delta="1" aria-label="More">+</button>
         </div>
         <span class="small muted unit" style="width:30px">${esc(it.unit)}</span>
-        <button class="icon-btn danger" data-del-food="${it.id}" aria-label="Remove ${esc(it.name)}">${icon('trash')}</button>
+        <button class="icon-btn danger" data-del-food="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">${icon('trash')}</button>
       </li>`;
     }).join('')}</ul>`).join('') : emptyState('🥫', 'Nothing in yet. Add items, scan a barcode, or snap a photo.');
 
@@ -516,7 +516,7 @@ function aiIdeasCard() {
     ${ideas ? `<div class="meal-grid" style="margin-top:14px">${ideas.map((idea, i) => `
       <div class="card meal-card" style="box-shadow:none">
         <div class="top"><span class="emoji">${MEAL_EMOJI(idea.name)}</span>
-          <div style="flex:1;min-width:0"><div class="name">${esc(idea.name)}</div><div class="meta"><span>${icon('clock')} ${idea.minutes} min</span><span>Serves ${idea.servings}</span></div></div></div>
+          <div style="flex:1;min-width:0"><div class="name">${esc(idea.name)}</div><div class="meta"><span>${icon('clock')} ${esc(idea.minutes)} min</span><span>Serves ${esc(idea.servings)}</span></div></div></div>
         <p class="small">${esc(idea.why)}</p>
         ${idea.missing.length ? `<div class="small">To buy: <strong>${idea.missing.map(esc).join(', ')}</strong></div>` : '<span class="pill" style="align-self:flex-start">Nothing to buy</span>'}
         <details><summary>Ingredients and method</summary>
@@ -551,18 +551,18 @@ function mealsView(meals, ai = null) {
         <div class="top">
           <span class="emoji">${MEAL_EMOJI(m.name)}</span>
           <div class="grow" style="flex:1;min-width:0"><div class="name">${esc(m.name)}</div>
-            <div class="meta"><span>${icon('clock')} ${m.minutes} min</span><span>${m.tags.filter((t) => t !== 'vegetarian').map(esc).join(' · ')}</span></div></div>
-          <button class="icon-btn star ${m.favourite ? 'on' : ''}" data-fav="${m.id}" data-state="${m.favourite}" aria-label="${m.favourite ? 'Remove from' : 'Add to'} favourites" title="Family favourite">${m.favourite ? '★' : '☆'}</button>
+            <div class="meta"><span>${icon('clock')} ${esc(m.minutes)} min</span><span>${m.tags.filter((t) => t !== 'vegetarian').map(esc).join(' · ')}</span></div></div>
+          <button class="icon-btn star ${m.favourite ? 'on' : ''}" data-fav="${esc(m.id)}" data-state="${m.favourite}" aria-label="${m.favourite ? 'Remove from' : 'Add to'} favourites" title="Family favourite">${m.favourite ? '★' : '☆'}</button>
         </div>
         ${why.has(m.id) ? `<div class="small" style="color:var(--accent);font-weight:600">✨ ${esc(why.get(m.id))}</div>` : ''}
         <div class="chips">${why.has(m.id) ? '<span class="pill blue">✨ AI pick</span>' : ''}${tag}${m.usesExpiring ? '<span class="pill warn">Uses food going off</span>' : ''}${m.diet.filter((d) => d !== 'nut-free').map((d) => `<span class="pill plain">${DIET_LABEL[d]}</span>`).join('')}</div>
         ${m.missing.length ? `<div class="small">Missing: <strong>${m.missing.map(esc).join(', ')}</strong></div>` : ''}
-        ${m.short.length ? `<div class="small">Short: ${m.short.map((s) => `${esc(s.name)} (${s.have}/${s.need} ${s.unit})`).join(', ')}</div>` : ''}
+        ${m.short.length ? `<div class="small">Short: ${m.short.map((s) => `${esc(s.name)} (${esc(s.have)}/${esc(s.need)} ${esc(s.unit)})`).join(', ')}</div>` : ''}
         <details><summary>Ingredients for your family</summary>
           <ul>${m.ingredients.map((i) => `<li>${fmtAmount(i)} ${esc(i.name)}${i.optional ? ' <span class="muted">(optional)</span>' : ''}</li>`).join('')}</ul>
         </details>
         <div class="actions">
-          ${m.status === 'ready' ? `<button class="btn primary sm" data-cook="${m.id}">${icon('check')} Cooked it</button>` : ''}
+          ${m.status === 'ready' ? `<button class="btn primary sm" data-cook="${esc(m.id)}">${icon('check')} Cooked it</button>` : ''}
           ${needs.length ? `<button class="btn sm" data-shop-missing="${esc(JSON.stringify(needs))}">${icon('cart')} Add to shopping</button>` : ''}
         </div>
       </div>`;
@@ -609,8 +609,8 @@ function recipesView(recipes) {
         ${mine.length ? `<ul class="list">${mine.map((r) => `
           <li class="row"><span class="emoji">${MEAL_EMOJI(r.name)}</span>
             <div class="grow"><div class="title">${esc(r.name)}</div>
-              <div class="sub">Serves ${r.servings} · ${r.minutes} min · ${r.ingredients.map((i) => esc(i.name)).join(', ')}</div></div>
-            <button class="icon-btn danger" data-del-recipe="${r.id}" aria-label="Delete ${esc(r.name)}">${icon('trash')}</button>
+              <div class="sub">Serves ${esc(r.servings)} · ${esc(r.minutes)} min · ${r.ingredients.map((i) => esc(i.name)).join(', ')}</div></div>
+            <button class="icon-btn danger" data-del-recipe="${esc(r.id)}" aria-label="Delete ${esc(r.name)}">${icon('trash')}</button>
           </li>`).join('')}</ul>` : emptyState('📖', 'Add your family favourites and they will show up in meal ideas.')}
         <div class="group-title" style="margin-top:20px">Built-in recipes</div>
         <div class="chips">${recipes.filter((r) => r.builtin).map((r) => `<span class="pill plain">${MEAL_EMOJI(r.name)} ${esc(r.name)}</span>`).join('')}</div>
@@ -624,7 +624,9 @@ function addIngredientRow() {
 }
 
 // "81.3 g" reads oddly in a kitchen: round grams/ml to 5 (10 above 100) and drop "pcs".
-function fmtAmount({ amount, unit }) {
+const fmtAmount = (x) => esc(amountText(x));
+function amountText({ amount, unit }) {
+  unit = String(unit ?? '');
   if (unit === 'g' || unit === 'ml') {
     const step = amount >= 100 ? 10 : 5;
     const v = Math.max(step, Math.round(amount / step) * step);
@@ -677,7 +679,7 @@ async function renderClothes() {
   const s = stats.find((x) => x.childId === child.id);
   $('#page-sub').textContent = `${plural(items.length, 'item')} for ${child.name} · ${plural(outfits.total, 'outfit')}`;
   const inWash = items.filter((i) => i.inWash).length;
-  if (inWash) $('#page-actions').innerHTML = `<button class="btn" data-laundry-done="${child.id}">🧺 Laundry done (${inWash})</button>`;
+  if (inWash) $('#page-actions').innerHTML = `<button class="btn" data-laundry-done="${esc(child.id)}">🧺 Laundry done (${esc(inWash)})</button>`;
 
   const sizeIdx = (x) => state.sizes.indexOf(x);
   const fitLabel = (it) => {
@@ -706,7 +708,7 @@ async function renderClothes() {
   const o = ootd.outfit;
   $('#page').innerHTML = `
     <div class="kid-tabs" style="margin-bottom:16px">${kids.map((c, i) =>
-      `<button class="kid-tab ${c.id === child.id ? 'active' : ''}" data-kid="${c.id}">${avatar(c, i)}${esc(c.name)}</button>`).join('')}</div>
+      `<button class="kid-tab ${c.id === child.id ? 'active' : ''}" data-kid="${esc(c.id)}">${avatar(c, i)}${esc(c.name)}</button>`).join('')}</div>
 
     <div class="grid g2">
       <div class="card ootd">
@@ -728,11 +730,11 @@ async function renderClothes() {
       <ul class="list">
         ${passOn.map((h) => `<li class="row"><span class="emoji">${GARMENT[h.type] || '👕'}</span>
           <div class="grow"><div class="title">${esc(h.name)} <span class="pill plain">${esc(h.size)}</span></div><div class="sub">${esc(h.toName)} can ${h.fitsNow ? 'wear it now' : 'grow into it'}</div></div>
-          <button class="btn sm primary" data-handdown="${h.itemId}" data-to="${h.toChildId}">Pass to ${esc(h.toName)}</button></li>`).join('')}
+          <button class="btn sm primary" data-handdown="${esc(h.itemId)}" data-to="${esc(h.toChildId)}">Pass to ${esc(h.toName)}</button></li>`).join('')}
         ${sellable.map((it) => `<li class="row"><span class="emoji">${GARMENT[it.type] || '👕'}</span>
           <div class="grow"><div class="title">${esc(it.name)} <span class="pill plain">${esc(it.size)}</span></div><div class="sub">No sibling it fits</div></div>
-          <button class="btn sm" data-sell="${it.id}">${icon('copy')} Copy listing</button>
-          <button class="icon-btn danger" data-del-item="${it.id}" aria-label="Gone">${icon('trash')}</button></li>`).join('')}
+          <button class="btn sm" data-sell="${esc(it.id)}">${icon('copy')} Copy listing</button>
+          <button class="icon-btn danger" data-del-item="${esc(it.id)}" aria-label="Gone">${icon('trash')}</button></li>`).join('')}
       </ul></div>` : ''}
 
     <div class="split" style="margin-top:16px">
@@ -757,16 +759,16 @@ async function renderClothes() {
 
       <div class="card">
         <div class="card-head"><h2>Wardrobe</h2>
-          <div class="chips">${[['all', 'All'], ...typesPresent.map((t) => [t, GARMENT[t] + ' ' + cap(t)]), ...extraFilters].map(([k, l]) => `<button class="chip ${wf === k ? 'active' : ''}" data-wfilter="${k}">${l}</button>`).join('')}</div>
+          <div class="chips">${[['all', 'All'], ...typesPresent.map((t) => [t, GARMENT[t] + ' ' + cap(t)]), ...extraFilters].map(([k, l]) => `<button class="chip ${wf === k ? 'active' : ''}" data-wfilter="${esc(k)}">${esc(l)}</button>`).join('')}</div>
         </div>
         ${shownItems.length ? `<ul class="list">${shownItems.map((it) => `
           <li class="row">
             <span class="emoji" style="background:${esc(cssColour(it.colour))}">${GARMENT[it.type] || '👕'}</span>
             <div class="grow"><div class="title">${esc(it.name)} ${fitLabel(it)}</div>
               <div class="sub">${cap(esc(it.type))} · ${esc(it.size || 'no size')}${it.colour ? ' · ' + esc(it.colour) : ''}${it.pattern === 'patterned' ? ' · patterned' : ''}${it.season !== 'all' ? ' · ' + esc(it.season) : ''}</div></div>
-            ${it.wornOut ? '' : `<button class="btn ghost sm" data-wash="${it.id}" data-state="${Boolean(it.inWash)}" title="${it.inWash ? 'Back in the drawer' : 'Put in the wash'}">${it.inWash ? 'Clean' : '🧺 Wash'}</button>`}
-            <button class="btn ghost sm" data-worn="${it.id}" data-state="${it.wornOut}">${it.wornOut ? 'Mark OK' : 'Worn out'}</button>
-            <button class="icon-btn danger" data-del-item="${it.id}" aria-label="Remove ${esc(it.name)}">${icon('trash')}</button>
+            ${it.wornOut ? '' : `<button class="btn ghost sm" data-wash="${esc(it.id)}" data-state="${Boolean(it.inWash)}" title="${it.inWash ? 'Back in the drawer' : 'Put in the wash'}">${it.inWash ? 'Clean' : '🧺 Wash'}</button>`}
+            <button class="btn ghost sm" data-worn="${esc(it.id)}" data-state="${it.wornOut}">${it.wornOut ? 'Mark OK' : 'Worn out'}</button>
+            <button class="icon-btn danger" data-del-item="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">${icon('trash')}</button>
           </li>`).join('')}</ul>` : emptyState('🧺', 'No clothes here yet.')}
       </div>
     </div>
@@ -814,12 +816,12 @@ async function renderShopping() {
 
   const row = (it) => `
     <li class="row ${it.done ? 'done' : ''}">
-      <button class="check ${it.done ? 'on' : ''}" data-toggle="${it.id}" data-state="${it.done}" aria-label="Tick ${esc(it.name)}">${icon('check')}</button>
-      <div class="grow"><div class="title">${it.quantity ? it.quantity + ' × ' : ''}${esc(cap(it.name))}${it.size ? ` <span class="pill plain">${esc(it.size)}</span>` : ''}</div>
+      <button class="check ${it.done ? 'on' : ''}" data-toggle="${esc(it.id)}" data-state="${it.done}" aria-label="Tick ${esc(it.name)}">${icon('check')}</button>
+      <div class="grow"><div class="title">${it.quantity ? esc(it.quantity) + ' × ' : ''}${esc(cap(it.name))}${it.size ? ` <span class="pill plain">${esc(it.size)}</span>` : ''}</div>
         ${it.childId || it.note || byOther(it) ? `<div class="sub">${[it.childId && 'For ' + esc(childName(it.childId) || 'child'), it.note && esc(it.note), byOther(it) && `Added by ${esc(personName(it.addedBy, data.people))}`].filter(Boolean).join(' · ')}</div>` : ''}
         ${it.kind === 'food' && !it.done ? `<div class="sub shops">${SHOPS.map(([n, url]) => `<a href="${esc(url(it.name))}" target="_blank" rel="noopener">${esc(n)}</a>`).join(' · ')}</div>` : ''}</div>
-      ${it.kind !== 'other' ? `<button class="btn sm" data-bought="${it.id}">${icon('bag')} Bought</button>` : ''}
-      <button class="icon-btn danger" data-del-shop="${it.id}" aria-label="Remove ${esc(it.name)}">${icon('x')}</button>
+      ${it.kind !== 'other' ? `<button class="btn sm" data-bought="${esc(it.id)}">${icon('bag')} Bought</button>` : ''}
+      <button class="icon-btn danger" data-del-shop="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">${icon('x')}</button>
     </li>`;
 
   $('#page').innerHTML = `
@@ -833,7 +835,7 @@ async function renderShopping() {
               <label class="field">Kind<select name="kind"><option value="food">Food</option><option value="clothes">Clothes</option><option value="other">Other</option></select></label>
               <label class="field">How many<input name="quantity" type="number" min="0" step="any"></label>
             </div>
-            <label class="field">For (clothes only)<select name="childId"><option value="">—</option>${children.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+            <label class="field">For (clothes only)<select name="childId"><option value="">—</option>${children.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></label>
             <button class="btn primary">${icon('plus')} Add</button>
           </form>
           ${quickAdd(data)}
@@ -873,7 +875,7 @@ function spendingCard(sp) {
     </form>
     ${sp.entries.length ? `<ul class="list" style="margin-top:8px">${sp.entries.slice(0, 6).map((e) => `<li class="row">
       <div class="grow"><div class="title">${moneyP(e.amount)}${e.shop ? ` · ${esc(e.shop)}` : ''}</div><div class="sub">${esc(fmtDate(e.date))}${e.addedBy && e.addedBy !== ACCOUNT?.status().email ? ` · ${esc(personName(e.addedBy))}` : ''}</div></div>
-      <button class="icon-btn danger" data-del-spend="${e.id}" aria-label="Remove ${moneyP(e.amount)}">${icon('x')}</button></li>`).join('')}</ul>` : ''}
+      <button class="icon-btn danger" data-del-spend="${esc(e.id)}" aria-label="Remove ${moneyP(e.amount)}">${icon('x')}</button></li>`).join('')}</ul>` : ''}
   </div>`;
 }
 const moneyP = (n) => '£' + Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -887,7 +889,7 @@ async function weekShop() {
     title: 'Shop for the week',
     body: `<ul class="list small">${r.days.map((m, d) => m ? `<li class="row"><div class="grow"><strong>${day(d)}</strong> ${esc(m.name)}${m.buy.length ? ` <span class="muted">· buy ${esc(m.buy.join(', '))}</span>` : ''}</div></li>` : '').join('')}</ul>
       <p class="muted" style="margin-top:10px">Adds ${plural(r.list.length, 'thing')} to the shopping list (anything already on it is skipped):</p>
-      <p class="small" style="margin-top:6px">${r.list.map((i) => esc(cap(i.name)) + (i.quantity ? ` <span class="muted">${i.quantity}${i.unit && i.unit !== 'pcs' ? ' ' + esc(i.unit) : ''}</span>` : '')).join(', ')}</p>`,
+      <p class="small" style="margin-top:6px">${r.list.map((i) => esc(cap(i.name)) + (i.quantity ? ` <span class="muted">${esc(i.quantity)}${i.unit && i.unit !== 'pcs' ? ' ' + esc(i.unit) : ''}</span>` : '')).join(', ')}</p>`,
     ok: `Add ${r.list.length} to the list`,
   });
   if (!ok) return;
@@ -921,7 +923,7 @@ function suggestionsCard(list, ai = null) {
     ${list.length ? `<ul class="list">${list.map((s, i) => `
       <li class="row">
         <span class="emoji">${s.kind === 'food' ? foodCat(s.name).emoji : GARMENT[s.type] || '👕'}</span>
-        <div class="grow"><div class="title">${s.quantity ? s.quantity + ' × ' : ''}${esc(cap(s.name))}${s.size ? ` <span class="pill plain">${esc(s.size)}</span>` : ''}</div>
+        <div class="grow"><div class="title">${s.quantity ? esc(s.quantity) + ' × ' : ''}${esc(cap(s.name))}${s.size ? ` <span class="pill plain">${esc(s.size)}</span>` : ''}</div>
           <div class="sub">${s.source === 'ai' && s.childName ? `For ${esc(s.childName)} · ` : ''}${esc(s.reason)}</div></div>
         <button class="btn sm" data-suggest="${i}">${icon('plus')} Add</button>
         <button class="icon-btn" data-snooze="${i}" aria-label="Not now: ${esc(s.name)}" title="Not now">${icon('x')}</button>
@@ -980,9 +982,9 @@ function choreRow(it) {
   return `<li class="row">
     <span class="emoji">${esc(it.emoji || '🧹')}</span>
     <div class="grow"><div class="title">${esc(it.name)}${it.overdue ? ' <span class="pill bad">Overdue</span>' : ''}</div>
-      <div class="sub">${it.whoName ? `<button class="btn ghost sm" style="padding:0" data-chore-by="${it.choreId}" title="Someone else did it?">${esc(it.whoName)}</button>` : 'Anyone'} · ${EFFORT[it.effort] || 'Quick'}</div></div>
-    <button class="btn sm primary" data-chore-done="${it.choreId}" data-by="${it.who || ''}">${icon('check')} Done</button>
-    <button class="icon-btn" data-chore-skip="${it.choreId}" aria-label="Not today: ${esc(it.name)}" title="Not today">${icon('clock')}</button>
+      <div class="sub">${it.whoName ? `<button class="btn ghost sm" style="padding:0" data-chore-by="${esc(it.choreId)}" title="Someone else did it?">${esc(it.whoName)}</button>` : 'Anyone'} · ${EFFORT[it.effort] || 'Quick'}</div></div>
+    <button class="btn sm primary" data-chore-done="${esc(it.choreId)}" data-by="${esc(it.who)}">${icon('check')} Done</button>
+    <button class="icon-btn" data-chore-skip="${esc(it.choreId)}" aria-label="Not today: ${esc(it.name)}" title="Not today">${icon('clock')}</button>
   </li>`;
 }
 
@@ -1020,7 +1022,7 @@ async function renderChores() {
         <div class="card" id="chores-today">
           <div class="card-head"><h2>Today</h2><span id="chores-by">${state.ai?.suggestions ? '' : '<span class="muted small">Shared out fairly by age and effort</span>'}</span></div>
           ${today.items.length ? `<ul class="list">${today.items.map(choreRow).join('')}</ul>` : v.chores.length ? emptyState('🎉', 'Nothing left to do today.') : emptyState('🧹', 'No chores yet. Add some below, or pick from the common ones.')}
-          ${doneToday.length ? `<div class="group-title">Done today</div><ul class="list">${doneToday.map((e) => `<li class="row done"><span class="emoji">✅</span><div class="grow"><div class="title">${esc(e.name)}</div><div class="sub">${esc(nameOf(e.by))}</div></div><button class="btn ghost sm" data-chore-undo="${e.id}">Undo</button></li>`).join('')}</ul>` : ''}
+          ${doneToday.length ? `<div class="group-title">Done today</div><ul class="list">${doneToday.map((e) => `<li class="row done"><span class="emoji">✅</span><div class="grow"><div class="title">${esc(e.name)}</div><div class="sub">${esc(nameOf(e.by))}</div></div><button class="btn ghost sm" data-chore-undo="${esc(e.id)}">Undo</button></li>`).join('')}</ul>` : ''}
         </div>
         <div class="card" id="chores-week">
           <div class="card-head"><h2>The week ahead</h2></div>
@@ -1032,10 +1034,10 @@ async function renderChores() {
         <div class="card" id="chores-points">
           <div class="card-head"><h2>⭐ This week</h2></div>
           <p class="hint">Points for each chore done: 1 quick, 2 medium, 3 for a big job.</p>
-          <ul class="list">${v.totals.map((t) => `<li class="row"><div class="grow"><div class="title">${esc(t.name)}${t.adult ? ` <button class="btn ghost sm" data-chore-rename="${t.id}" style="padding:0 4px">${icon('edit')}</button>` : ''}</div><div class="sub">${plural(t.done, 'chore')} done</div></div>
+          <ul class="list">${v.totals.map((t) => `<li class="row"><div class="grow"><div class="title">${esc(t.name)}${t.adult ? ` <button class="btn ghost sm" data-chore-rename="${esc(t.id)}" style="padding:0 4px">${icon('edit')}</button>` : ''}</div><div class="sub">${plural(t.done, 'chore')} done</div></div>
             <strong>${plural(t.points, 'point')}</strong>${t.money != null ? ` <span class="pill">${moneyP(t.money)}</span>` : ''}</li>`).join('')}</ul>
           <form id="pocket-form" class="form-row" style="grid-template-columns:1fr auto;margin-top:10px">
-            <label class="field">Pocket money per point (pence)<input name="perPoint" type="number" min="0" max="500" step="1" value="${v.perPoint || ''}" placeholder="e.g. 20"></label>
+            <label class="field">Pocket money per point (pence)<input name="perPoint" type="number" min="0" max="500" step="1" value="${esc(v.perPoint || '')}" placeholder="e.g. 20"></label>
             <button class="btn" style="align-self:end">Save</button>
           </form>
           ${!kidsMoney && !v.perPoint ? '<p class="hint" style="margin-top:6px">Leave empty for points only.</p>' : ''}
@@ -1050,7 +1052,7 @@ async function renderChores() {
               <label class="field">Size<select name="effort"><option value="1">Quick</option><option value="2">Medium</option><option value="3">Big job</option></select></label>
             </div>
             <div class="form-row" style="grid-template-columns:1fr 1fr">
-              <label class="field">Who<select name="who"><option value="">Share it out</option>${v.people.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+              <label class="field">Who<select name="who"><option value="">Share it out</option>${v.people.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label>
               <label class="field">Youngest age<input name="minAge" type="number" min="0" max="18" value="0"></label>
             </div>
             <button class="btn primary">${icon('plus')} Add chore</button>
@@ -1061,9 +1063,9 @@ async function renderChores() {
           <ul class="list">${v.chores.map((c) => `<li class="row ${c.paused ? 'done' : ''}">
             <span class="emoji">${esc(c.emoji || '🧹')}</span>
             <div class="grow"><div class="title">${esc(c.name)}${c.state === 'overdue' && !c.paused ? ' <span class="pill bad">Overdue</span>' : ''}</div>
-              <div class="sub">${esc(everyText(c.every))} · ${c.whoName ? esc(c.whoName) : 'shared out'}${c.minAge ? ` · ${c.minAge}+` : ''} · ${c.paused ? 'paused' : `next ${esc(dayName(c.due < v.today ? v.today : c.due, v.today).toLowerCase())}`}</div></div>
-            <button class="icon-btn" data-chore-edit="${c.id}" aria-label="Change ${esc(c.name)}">${icon('edit')}</button>
-            <button class="icon-btn danger" data-chore-del="${c.id}" aria-label="Remove ${esc(c.name)}">${icon('trash')}</button></li>`).join('')}</ul>
+              <div class="sub">${esc(everyText(c.every))} · ${c.whoName ? esc(c.whoName) : 'shared out'}${c.minAge ? ` · ${esc(c.minAge)}+` : ''} · ${c.paused ? 'paused' : `next ${esc(dayName(c.due < v.today ? v.today : c.due, v.today).toLowerCase())}`}</div></div>
+            <button class="icon-btn" data-chore-edit="${esc(c.id)}" aria-label="Change ${esc(c.name)}">${icon('edit')}</button>
+            <button class="icon-btn danger" data-chore-del="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">${icon('trash')}</button></li>`).join('')}</ul>
         </div>` : ''}
       </div>
     </div>`;
@@ -1094,7 +1096,7 @@ async function aiChores(refresh = false) {
 async function choreDone(id, by) {
   const v = state.chores || (await api('/chores'));
   if (!by) {
-    const got = await ask({ title: 'Who did it?', body: v.people.map((p, i) => `<label class="field" style="margin-top:8px"><span><input type="radio" name="by" value="${p.id}" ${i === 0 ? 'checked' : ''} style="width:auto"> ${esc(p.name)}</span></label>`).join(''), ok: 'Done' });
+    const got = await ask({ title: 'Who did it?', body: v.people.map((p, i) => `<label class="field" style="margin-top:8px"><span><input type="radio" name="by" value="${esc(p.id)}" ${i === 0 ? 'checked' : ''} style="width:auto"> ${esc(p.name)}</span></label>`).join(''), ok: 'Done' });
     if (!got) return;
     by = got.by;
   }
@@ -1110,9 +1112,9 @@ async function choreEdit(id) {
   const got = await ask({
     title: 'Change chore',
     body: field('name', 'Chore', 'text', c.name) +
-      `<label class="field" style="margin-top:10px">How often<select name="every">${everyOpts.map(([d, l]) => `<option value="${d}" ${d === c.every ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      `<label class="field" style="margin-top:10px">How often<select name="every">${everyOpts.map(([d, l]) => `<option value="${esc(d)}" ${d === c.every ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
       <label class="field" style="margin-top:10px">Size<select name="effort">${[1, 2, 3].map((n) => `<option value="${n}" ${n === c.effort ? 'selected' : ''}>${EFFORT[n]}</option>`).join('')}</select></label>
-      <label class="field" style="margin-top:10px">Who<select name="who"><option value="">Share it out</option>${ps.map((p) => `<option value="${p.id}" ${p.id === c.who ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` +
+      <label class="field" style="margin-top:10px">Who<select name="who"><option value="">Share it out</option>${ps.map((p) => `<option value="${esc(p.id)}" ${p.id === c.who ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` +
       field('minAge', 'Youngest age', 'number', String(c.minAge || 0), 'min="0" max="18"') +
       `<label class="field" style="margin-top:10px"><span><input type="checkbox" name="paused" ${c.paused ? 'checked' : ''} style="width:auto"> Pause this chore</span></label>`,
     ok: 'Save',
@@ -1134,11 +1136,11 @@ async function renderFamily() {
         <div class="card-head"><h2>Household</h2></div>
         <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
           <span style="font-weight:600">Adults</span>
-          <div class="stepper"><button data-adults="-1" aria-label="One fewer adult">−</button><input id="adults" type="number" min="0" max="20" value="${f.adults}" aria-label="Adults"><button data-adults="1" aria-label="One more adult">+</button></div>
+          <div class="stepper"><button data-adults="-1" aria-label="One fewer adult">−</button><input id="adults" type="number" min="0" max="20" value="${esc(f.adults)}" aria-label="Adults"><button data-adults="1" aria-label="One more adult">+</button></div>
         </div>
         <div class="grid g2" style="margin-top:18px">
-          <div class="forecast"><div class="k">People</div><div class="v" style="font-size:24px">${f.people}</div></div>
-          <div class="forecast"><div class="k">Portions per meal</div><div class="v" style="font-size:24px">${f.portions}</div></div>
+          <div class="forecast"><div class="k">People</div><div class="v" style="font-size:24px">${esc(f.people)}</div></div>
+          <div class="forecast"><div class="k">Portions per meal</div><div class="v" style="font-size:24px">${esc(f.portions)}</div></div>
         </div>
         <p class="hint" style="margin-top:12px">Adults and over-11s eat a full portion, 4 to 10 year olds three quarters, under-4s a half, and babies none.</p>
       </div>
@@ -1158,10 +1160,10 @@ async function renderFamily() {
 
     <div class="card-head" style="margin:26px 0 12px"><h2>Children</h2></div>
     ${f.children.length ? `<div class="grid g2">${f.children.map((c, i) => `
-      <form class="card child-edit stack" data-child="${c.id}">
+      <form class="card child-edit stack" data-child="${esc(c.id)}">
         <div class="kid-head">${avatar(c, i)}<div style="flex:1"><h3>${esc(c.name)}</h3>
           <div class="small muted">${c.age != null ? Math.floor(c.age) + ' years old' : 'Age unknown'}${c.sizeRecordedAt ? ' · size updated ' + fmtShort(c.sizeRecordedAt) : ''}</div></div>
-          <button type="button" class="icon-btn danger" data-del-child="${c.id}" aria-label="Remove ${esc(c.name)}">${icon('trash')}</button></div>
+          <button type="button" class="icon-btn danger" data-del-child="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">${icon('trash')}</button></div>
         <div class="form-row" style="grid-template-columns:1fr 1fr">
           <label class="field">Name<input name="name" value="${esc(c.name)}" required></label>
           <label class="field">Birthday<input name="birthDate" type="date" value="${esc(c.birthDate || '')}"></label>
@@ -1175,7 +1177,7 @@ async function renderFamily() {
       <div class="card-head"><h2>How many of each item a child should have</h2></div>
       <form id="targets-form">
         <div class="grid g4">${state.types.filter((t) => t !== 'other').map((t) =>
-          `<label class="field">${GARMENT[t]} ${cap(t)}<input type="number" min="0" name="${t}" value="${state.targets[t] ?? ''}" placeholder="–"></label>`).join('')}</div>
+          `<label class="field">${GARMENT[t] || ''} ${esc(cap(t))}<input type="number" min="0" name="${esc(t)}" value="${esc(state.targets[t])}" placeholder="–"></label>`).join('')}</div>
         <button class="btn primary" style="margin-top:14px">Save</button>
       </form>
     </div>`;
@@ -1203,7 +1205,7 @@ document.addEventListener('click', guard(async (e) => {
     return renderFood();
   }
   if (d.step) {
-    const input = $(`[data-qty="${d.step}"]`);
+    const input = $(`[data-qty="${CSS.escape(d.step)}"]`);
     const unit = input.closest('.row').querySelector('.unit').textContent.trim();
     const stepBy = ['g', 'ml'].includes(unit) ? 100 : 1;
     const value = Math.max(0, (Number(input.value) || 0) + Number(d.delta) * stepBy);
@@ -1360,7 +1362,7 @@ async function bought(id) {
       title: `Bought ${it.name}`,
       ok: 'Put in cupboard',
       body: `<div class="form-row" style="grid-template-columns:1fr 1fr">
-          <label class="field">Amount<input name="quantity" type="number" step="any" min="0" value="${it.quantity ?? ''}"></label>
+          <label class="field">Amount<input name="quantity" type="number" step="any" min="0" value="${esc(it.quantity)}"></label>
           <label class="field">Unit<select name="unit">${options(state.units, it.unit || 'pcs')}</select></label></div>
         <label class="field" style="margin-top:10px">Use by (optional)<input name="expiry" type="date"></label>`,
     });
@@ -1370,7 +1372,7 @@ async function bought(id) {
     const res = await ask({
       title: `Bought ${it.name}`,
       ok: 'Add to wardrobe',
-      body: `<label class="field">How many<input name="count" type="number" min="1" max="20" value="${it.quantity || 1}"></label>
+      body: `<label class="field">How many<input name="count" type="number" min="1" max="20" value="${esc(it.quantity || 1)}"></label>
         <label class="field" style="margin-top:10px">Name<input name="name" value="New ${esc(it.type || it.name)}"></label>
         <label class="field" style="margin-top:10px">Colour<input name="colour" placeholder="optional"></label>`,
     });
@@ -1652,7 +1654,7 @@ async function accountInvite() {
     title: 'Invite someone',
     body: `<p class="muted">Give them this code. They create their own account in Family Planner, then go to Settings, tap <strong>Join a household</strong> and enter it.</p>
       <p style="font-size:1.8rem;font-weight:700;letter-spacing:.12em;text-align:center;margin:16px 0" id="invite-code">${esc(prettyCode(r.code))}</p>
-      <p class="hint">The code works for ${r.days || 7} days. Anyone with it can join, so only share it with family.</p>`,
+      <p class="hint">The code lets one person join and works for ${esc(r.days || 7)} days. Make a new one for each person, and only share it with family.</p>`,
     ok: 'Done',
   });
   loadHousehold();
@@ -1814,8 +1816,8 @@ async function renderSettings() {
             <input name="baseUrl" value="${esc(ai.baseUrl)}" placeholder="${esc(preset.baseUrl || 'https://…')}"></label>
         </div>
         <div class="form-row" style="grid-template-columns:1fr 2fr">
-          <label class="field">Monthly limit<input name="monthlyLimit" type="number" min="0" value="${ai.monthlyLimit}"></label>
-          <p class="hint" style="align-self:center">${ai.usage && ai.usage.month ? `Used ${ai.usage.count} this month.` : 'Not used yet this month.'} 0 means no limit.</p>
+          <label class="field">Monthly limit<input name="monthlyLimit" type="number" min="0" value="${esc(ai.monthlyLimit)}"></label>
+          <p class="hint" style="align-self:center">${ai.usage && ai.usage.month ? `Used ${esc(ai.usage.count)} this month.` : 'Not used yet this month.'} 0 means no limit.</p>
         </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn primary">Save</button>
@@ -1830,7 +1832,7 @@ async function renderSettings() {
         <div class="card-head"><h2>💷 Clothes prices</h2></div>
         <p class="hint">Typical prices used for the clothes budget.</p>
         <form id="prices-form" style="margin-top:12px">
-          <div class="grid g4">${state.types.map((t) => `<label class="field">${GARMENT[t]} ${cap(t)}<input type="number" min="0" step="0.5" name="${t}" value="${prices[t] ?? ''}"></label>`).join('')}</div>
+          <div class="grid g4">${state.types.map((t) => `<label class="field">${GARMENT[t] || ''} ${esc(cap(t))}<input type="number" min="0" step="0.5" name="${esc(t)}" value="${esc(prices[t])}"></label>`).join('')}</div>
           <button class="btn primary" style="margin-top:12px">Save prices</button>
         </form>
       </div>
@@ -1890,7 +1892,7 @@ async function aiScan(kind) {
     ? `<div class="ing-row" style="grid-template-columns:auto 1fr 80px 80px">
         <input type="checkbox" name="keep-${i}" checked style="width:auto">
         <input name="name-${i}" value="${esc(it.name)}">
-        <input name="quantity-${i}" type="number" step="any" min="0" value="${it.quantity ?? ''}" placeholder="?">
+        <input name="quantity-${i}" type="number" step="any" min="0" value="${esc(it.quantity)}" placeholder="?">
         <select name="unit-${i}">${options(state.units, it.unit)}</select></div>`
     : `<div class="ing-row" style="grid-template-columns:auto 1fr auto">
         <input type="checkbox" name="keep-${i}" checked style="width:auto">
@@ -1965,7 +1967,7 @@ async function scanBarcode() {
     body: `${product.brand ? `<p class="muted">${esc(product.brand)}${product.packSize ? ' · ' + esc(product.packSize) : ''}</p>` : ''}
       <label class="field" style="margin-top:10px">Name<input name="name" value="${esc(product.name)}"></label>
       <div class="form-row" style="grid-template-columns:1fr 1fr;margin-top:10px">
-        <label class="field">Amount<input name="quantity" type="number" step="any" min="0" value="${product.quantity ?? ''}"></label>
+        <label class="field">Amount<input name="quantity" type="number" step="any" min="0" value="${esc(product.quantity)}"></label>
         <label class="field">Unit<select name="unit">${options(state.units, product.unit)}</select></label></div>
       <label class="field" style="margin-top:10px">Use by (optional)<input name="expiry" type="date"></label>`,
   });

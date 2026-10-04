@@ -51,11 +51,11 @@ async function cognito(action, body) {
   return data;
 }
 
-// What gets uploaded: everything except this device's AI key and usage count.
+// What gets uploaded: everything except this device's AI key (and which server it's for) and usage count.
 export function shareable(data) {
   const out = { ...data };
   if (out.ai) {
-    const { apiKey, usage, ...rest } = out.ai;
+    const { apiKey, keyFor, usage, ...rest } = out.ai;
     out.ai = rest;
   }
   return out;
@@ -64,8 +64,8 @@ export function shareable(data) {
 // Take the account's copy, keeping this device's AI key and usage.
 export function merged(remote, local) {
   const out = { ...remote };
-  if (remote.ai || local.ai) out.ai = { ...(local.ai || {}), ...(remote.ai || {}), apiKey: local.ai?.apiKey || '', usage: local.ai?.usage };
-  if (out.ai && out.ai.usage === undefined) delete out.ai.usage;
+  if (remote.ai || local.ai) out.ai = { ...(local.ai || {}), ...(remote.ai || {}), apiKey: local.ai?.apiKey || '', keyFor: local.ai?.keyFor, usage: local.ai?.usage };
+  for (const k of ['keyFor', 'usage']) if (out.ai && out.ai[k] === undefined) delete out.ai[k];
   return out;
 }
 
@@ -288,6 +288,7 @@ export function createAccount(store) {
   async function join(code) {
     signedIn();
     await settle();
+    if (sync.dirty) await syncNow(); // save this household's last changes before switching
     const r = await api('POST', { code }, '/join');
     const remote = await api('GET');
     if (remote.data) await adopt(remote.data, remote.rev);

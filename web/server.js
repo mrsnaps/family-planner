@@ -15,6 +15,7 @@ const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
 
 const PUBLIC = path.join(__dirname, 'public');
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(/\s+/).filter(Boolean);
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -74,7 +75,7 @@ function createApp(store) {
     const data = {};
     for (const k of SECTIONS) if (store.data[k] !== undefined) data[k] = store.data[k];
     if (store.data.ai) {
-      const { apiKey, usage, suggestCache, ...rest } = store.data.ai;
+      const { apiKey, keyFor, usage, suggestCache, ...rest } = store.data.ai;
       data.ai = rest;
     }
     return { app: 'family-planner', version: 1, exportedAt: new Date().toISOString(), data };
@@ -85,8 +86,24 @@ function createApp(store) {
     for (const k of SECTIONS) {
       if (data[k] !== undefined && (typeof data[k] !== 'object' || Array.isArray(data[k]))) throw new HttpError(400, `Backup section ${k} is damaged`);
     }
+    // Lists the app reads straight away must be lists, or the pages would break after restoring.
+    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'] };
+    for (const [k, keys] of Object.entries(LISTS)) {
+      for (const key of keys) {
+        const v = data[k] && data[k][key];
+        if (v !== undefined && (!Array.isArray(v) || v.some((x) => key !== 'dietary' && key !== 'favourites' && (x === null || typeof x !== 'object')))) {
+          throw new HttpError(400, `Backup section ${k} is damaged`);
+        }
+      }
+    }
+    if (data.ai !== undefined && (typeof data.ai !== 'object' || data.ai === null || Array.isArray(data.ai))) throw new HttpError(400, 'Backup section ai is damaged');
     for (const k of SECTIONS) if (data[k] !== undefined) store.data[k] = data[k];
-    if (data.ai) store.data.ai = { ...(store.data.ai || {}), ...data.ai, apiKey: store.data.ai?.apiKey || '' };
+    if (data.ai) {
+      // This device's AI key (and which server it's for) and its usage count are never taken from a file.
+      const { apiKey, keyFor, usage, ...ai } = data.ai;
+      const mine = store.data.ai || {};
+      store.data.ai = { ...mine, ...ai, apiKey: mine.apiKey || '', keyFor: mine.keyFor, usage: mine.usage };
+    }
     store.save();
     return { ok: true };
   });
@@ -94,17 +111,29 @@ function createApp(store) {
 
   return async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    // Open CORS so a phone app or another front end can call the API.
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Family-Member');
+    // Other web pages can't use this API: only addresses listed in CORS_ORIGINS (space
+    // separated, for another front end) are let in. The app itself is on the same address.
+    const origin = req.headers && req.headers.origin;
+    if (origin && CORS_ORIGINS.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Family-Member');
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     if (req.method === 'OPTIONS') return res.writeHead(204).end();
 
     if (url.pathname.startsWith('/api/')) {
       const hit = router.match(req.method, url.pathname);
       try {
         if (!hit) throw new HttpError(404, 'Not found');
-        const body = ['POST', 'PUT'].includes(req.method) ? await readJson(req) : {};
+        // Changes must be sent as JSON. A form on another site can't send that without asking first.
+        if (['POST', 'PUT'].includes(req.method) && !/^application\/json\b/i.test((req.headers && req.headers['content-type']) || '')) {
+          throw new HttpError(415, 'Send JSON (Content-Type: application/json)');
+        }
+        let body = ['POST', 'PUT'].includes(req.method) ? await readJson(req) : {};
+        if (!body || typeof body !== 'object' || Array.isArray(body)) body = {};
         req.query = url.searchParams;
         const result = await hit.handler(req, body, hit.params);
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result));
@@ -119,7 +148,7 @@ function createApp(store) {
 
     // Static files; anything unknown falls back to the single-page app.
     let file = path.normalize(path.join(PUBLIC, url.pathname));
-    if (!file.startsWith(PUBLIC)) return res.writeHead(403).end();
+    if (file !== PUBLIC && !file.startsWith(PUBLIC + path.sep)) return res.writeHead(403).end();
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(PUBLIC, 'index.html');
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
     fs.createReadStream(file).pipe(res);

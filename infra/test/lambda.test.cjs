@@ -45,7 +45,7 @@ const call = async (who, method, path, body) => {
     headers: { origin: 'https://app.example' },
     rawPath: path,
     body: body && JSON.stringify(body),
-    requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: who, email: `${who}@example.com` } } } },
+    requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: who, email: `${who}@example.com`, email_verified: 'true' } } } },
   });
   return { status: r.statusCode, body: r.body ? JSON.parse(r.body) : null, headers: r.headers };
 };
@@ -99,7 +99,27 @@ test('a third person can be invited by someone who joined', async () => {
   await call('gran', 'POST', '/join', { code: inv.body.code });
   assert.deepEqual((await call('gran', 'GET', '/data')).body.data, { pantry: ['rice'] });
   assert.equal((await call('mum', 'GET', '/household')).body.members.length, 3);
-  assert.deepEqual((await call('gran', 'POST', '/join', { code: inv.body.code })).body, { ok: true, already: true });
+  // Each code lets one person in.
+  assert.equal((await call('stranger', 'POST', '/join', { code: inv.body.code })).status, 404);
+  assert.deepEqual((await call('stranger', 'GET', '/data')).body.data, null);
+});
+
+test("a code stops working once the person who made it has left that household", async () => {
+  const inv = await call('gran', 'POST', '/invite');
+  const mumsHousehold = (await call('gran', 'GET', '/data')).body.data;
+  assert.equal((await call('gran', 'POST', '/leave')).status, 200);
+  assert.equal((await call('stranger', 'POST', '/join', { code: inv.body.code })).status, 404);
+  assert.notDeepEqual((await call('stranger', 'GET', '/data')).body.data, mumsHousehold);
+  await call('gran', 'POST', '/join', { code: (await call('mum', 'POST', '/invite')).body.code });
+});
+
+test('an email address that has not been confirmed is not shown to the household', async () => {
+  const r = await handler({
+    headers: {},
+    rawPath: '/household',
+    requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: { sub: 'unconfirmed', email: 'mum@example.com', email_verified: 'false' } } } },
+  });
+  assert.deepEqual(JSON.parse(r.body).members, [{ email: null, you: true }]);
 });
 
 test('leaving goes back to your own household; the founder cannot leave their own', async () => {

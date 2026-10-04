@@ -191,8 +191,11 @@ function register(router, store, family) {
   });
 
   router.post('/api/v1/chores/suggestions/dismiss', (req, body) => {
-    if (!body || !body.key) throw new HttpError(400, 'Which suggestion? (key)');
-    data().dismissed[String(body.key)] = new Date(Date.now() + SNOOZE_DAYS * 86400000).toISOString();
+    if (!body || !body.key || String(body.key).length > 100) throw new HttpError(400, 'Which suggestion? (key)');
+    const d = data().dismissed;
+    const now = new Date().toISOString();
+    for (const [k, until] of Object.entries(d)) if (until < now) delete d[k];
+    d[String(body.key)] = new Date(Date.now() + SNOOZE_DAYS * 86400000).toISOString();
     store.save();
     return { ok: true };
   });

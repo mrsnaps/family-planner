@@ -1,7 +1,7 @@
 // Shared family settings. Both modules read this: food scales portions by it,
 // clothes uses each child's age and current size.
 const { newId } = require('../lib/store');
-const { HttpError } = require('../lib/http');
+const { HttpError, text } = require('../lib/http');
 const { parseSize, normalise } = require('./clothes/sizes');
 
 const DEFAULT_FAMILY = { adults: 2, children: [], dietary: [] };
@@ -33,7 +33,7 @@ function portions(family, now = new Date()) {
 
 function cleanChild(input, existing = {}) {
   const c = { ...existing };
-  if (input.name !== undefined) c.name = String(input.name).trim();
+  if (input.name !== undefined) c.name = text(input.name, 40);
   if (!c.name) throw new HttpError(400, 'Child needs a name');
   if (input.birthDate !== undefined) {
     if (input.birthDate && isNaN(new Date(input.birthDate))) throw new HttpError(400, 'Bad birthDate');
@@ -48,12 +48,13 @@ function cleanChild(input, existing = {}) {
     c.clothingSize = size;
   }
   if (input.shoeSize !== undefined) {
-    const shoe = input.shoeSize ? String(input.shoeSize).trim() : null;
+    const shoe = input.shoeSize ? text(input.shoeSize, 10) : null;
     if (shoe !== existing.shoeSize) c.shoeSizeRecordedAt = shoe ? new Date().toISOString().slice(0, 10) : null;
     c.shoeSize = shoe;
   }
-  if (input.sizeRecordedAt) c.sizeRecordedAt = input.sizeRecordedAt;
-  if (input.shoeSizeRecordedAt) c.shoeSizeRecordedAt = input.shoeSizeRecordedAt;
+  const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !isNaN(new Date(v)) ? String(v) : null);
+  if (input.sizeRecordedAt && day(input.sizeRecordedAt)) c.sizeRecordedAt = day(input.sizeRecordedAt);
+  if (input.shoeSizeRecordedAt && day(input.shoeSizeRecordedAt)) c.shoeSizeRecordedAt = day(input.shoeSizeRecordedAt);
   return c;
 }
 
@@ -93,7 +94,7 @@ function register(router, store) {
       if (l !== null && (typeof l !== 'object' || !Number.isFinite(Number(l.lat)) || !Number.isFinite(Number(l.lon)))) {
         throw new HttpError(400, 'location needs lat and lon');
       }
-      f.location = l === null ? null : { name: String(l.name || ''), lat: Number(l.lat), lon: Number(l.lon) };
+      f.location = l === null ? null : { name: text(l.name, 80), lat: Number(l.lat), lon: Number(l.lon) };
     }
     store.save();
     return summary();

@@ -74,7 +74,7 @@ There's a light and dark mode (it follows your device until you pick one), and o
 
 ## API (shared by the web and phone apps)
 
-Everything the UI does goes through this JSON API, and CORS is open, so a phone app can use it unchanged.
+Everything the UI does goes through this JSON API, so a phone app can use it unchanged. Other web pages can't call it unless their address is listed in `CORS_ORIGINS` (space separated). Changes must be sent as JSON.
 
 | Method | Path | What it does |
 | --- | --- | --- |

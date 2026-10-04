@@ -30,7 +30,11 @@ class Router {
       const m = r.re.exec(pathname);
       if (!m) continue;
       const params = {};
-      r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
+      try {
+        r.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
+      } catch {
+        return { handler: () => { throw new HttpError(400, 'Bad address'); }, params };
+      }
       return { handler: r.handler, params };
     }
     return null;
@@ -43,7 +47,10 @@ function readJson(req) {
     req.on('data', (c) => {
       body += c;
       // Room for a phone photo (base64) for AI scanning.
-      if (body.length > 10e6) reject(new HttpError(413, 'Body too large'));
+      if (body.length > 10e6) {
+        reject(new HttpError(413, 'Body too large'));
+        req.destroy?.();
+      }
     });
     req.on('end', () => {
       if (!body) return resolve({});
@@ -57,4 +64,7 @@ function readJson(req) {
   });
 }
 
-module.exports = { Router, HttpError, readJson };
+// Text from a request, trimmed and cut to a sensible length (so one field can't fill the store).
+const text = (v, max = 100) => String(v ?? '').trim().slice(0, max);
+
+module.exports = { Router, HttpError, readJson, text };
