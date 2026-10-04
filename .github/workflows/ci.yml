@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions: { contents: read, statuses: write }
+    env: { GH_TOKEN: '${{ github.token }}' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,6 +31,7 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+          (n=0; while sleep 3; do n=$((n+1)); gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=pending -f context="mem$n" -f description="$(free -m | awk 'NR==2{print $3"MB"}') $(ps -eo rss,args --sort=-rss | sed -n 2p | cut -c1-90)" >/dev/null 2>&1; done) &
           npm test
           npm run test:e2e
           npm run test:web

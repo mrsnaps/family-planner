@@ -466,17 +466,18 @@ try {
     assert.equal(added.status, 200, JSON.stringify(added.data));
     await page.evaluate(() => document.querySelector('[data-nav="clothes"]').click());
     await page.waitForSelector('#toast.show:has-text("all set up")');
-    assert.equal(await page.$('#guide-banner'), null);
+    await page.waitForSelector('#guide-banner', { state: 'detached' });
     await page.evaluate(() => document.querySelector('[data-nav="home"]').click());
+    await page.waitForSelector('#guide-card', { state: 'detached' });
     await page.waitForSelector('.kpi');
-    assert.equal(await page.$('#guide-card'), null);
     // Skipping on another fresh device hides it for good.
     const other = await open();
     await other.page.click('[data-guide="skip"]');
     await other.page.waitForSelector('#toast.show:has-text("No problem")');
-    assert.equal(await other.page.$('#guide-card'), null);
+    await other.page.waitForSelector('#guide-card', { state: 'detached' });
     await other.page.evaluate(() => document.querySelector('[data-nav="family"]').click());
-    await other.page.waitForSelector('#page .card');
+    await other.page.waitForSelector('#page-title:has-text("Family")');
+    await other.page.waitForTimeout(300);
     assert.equal(await other.page.$('#guide-banner'), null);
     assert.deepEqual([...errors, ...other.errors], []);
     ok('first-run guide walks a new family through the three steps, and can be skipped');
