@@ -172,20 +172,22 @@ const PAGES = [
   { id: 'clothes', label: 'Clothes', icon: 'shirt', title: 'Clothes', render: renderClothes },
   { id: 'shopping', label: 'Shop', icon: 'cart', title: 'Shopping list', render: renderShopping },
   { id: 'chores', label: 'Chores', icon: 'broom', title: 'Chores', render: renderChores },
+  { id: 'calendar', label: 'Diary', icon: 'calendar', title: 'Calendar', render: renderCalendar },
   { id: 'family', label: 'Family', icon: 'people', title: 'Family', render: renderFamily },
   { id: 'settings', label: 'Settings', icon: 'gear', title: 'Settings', render: renderSettings },
   { id: 'kitchen', label: 'Kitchen', icon: 'home', title: 'Kitchen screen', render: renderKitchen, hidden: true },
+  { id: 'kids', label: 'Kids', icon: 'people', title: "Kids' view", render: renderKids, hidden: true },
 ];
 // Tools that can be hidden in Settings > Customise (Home, Family and Settings always show).
-const TOOLS = ['food', 'clothes', 'shopping', 'chores'];
+const TOOLS = ['food', 'clothes', 'shopping', 'chores', 'calendar'];
 
 // ---------- look and layout (each device chooses its own) ----------
 const LOOK_DEFAULT = {
   accent: 'green', size: 'normal', hidden: [], start: 'home',
-  kitchen: { panels: ['dinner', 'chores', 'shopping', 'food', 'outfits', 'reminders'], awake: true, dim: true },
+  kitchen: { panels: ['dinner', 'calendar', 'chores', 'shopping', 'food', 'outfits', 'reminders'], awake: true, dim: true },
 };
 const ACCENTS = [['green', 'Green', '#2e6b57'], ['blue', 'Blue', '#2f5fa8'], ['purple', 'Purple', '#6a4bb0'], ['orange', 'Orange', '#b65a1e'], ['pink', 'Pink', '#b03a72'], ['teal', 'Teal', '#1f7a85'], ['slate', 'Slate', '#4a5568']];
-const KITCHEN_PANELS = [['dinner', "Tonight's dinner"], ['chores', "Today's chores"], ['shopping', 'Shopping list'], ['food', 'Food to use soon'], ['outfits', 'Outfits for today'], ['reminders', 'Reminders'], ['week', "The week's dinners"]];
+const KITCHEN_PANELS = [['dinner', "Tonight's dinner"], ['calendar', 'Today and tomorrow'], ['chores', "Today's chores"], ['shopping', 'Shopping list'], ['food', 'Food to use soon'], ['outfits', 'Outfits for today'], ['reminders', 'Reminders'], ['week', "The week's dinners"]];
 const look = (() => {
   let v = {};
   try { v = JSON.parse(localStorage.getItem('fp-look') || '{}') || {}; } catch {}
@@ -214,6 +216,7 @@ function renderNav() {
   $('#nav').innerHTML = pages.map((p) => btn(p)).join('');
   $('#tabbar').innerHTML = pages.map((p) => btn(p, true)).join('');
   $('#tabbar').style.gridTemplateColumns = `repeat(${pages.length}, minmax(0, 1fr))`;
+  $('#tabbar').dataset.many = String(pages.length > 7);
   const dark = currentTheme() === 'dark';
   $('#theme-btn').innerHTML = `${icon(dark ? 'sun' : 'moon')}<span>${dark ? 'Light mode' : 'Dark mode'}</span>`;
 }
@@ -233,6 +236,7 @@ $('#theme-btn').addEventListener('click', () => {
 function go(page) {
   state.page = PAGES.some((p) => p.id === page) ? page : 'home';
   document.body.classList.toggle('kitchen-mode', state.page === 'kitchen');
+  document.body.classList.toggle('kids-mode', state.page === 'kids');
   if (state.page !== 'kitchen') kitchenOff();
   history.replaceState(null, '', '#' + state.page);
   window.scrollTo(0, 0);
@@ -330,7 +334,7 @@ function kidCard(s, i, { compact = false } = {}) {
 }
 
 function reminderList(list, limit = 6) {
-  const icon_ = { food: '🥕', clothes: '👕', laundry: '🧺', shopping: '🛒' };
+  const icon_ = { food: '🥕', clothes: '👕', laundry: '🧺', shopping: '🛒', chores: '🧹', calendar: '🎒', birthday: '🎂', packing: '🧳', money: '💷' };
   return `<ul class="list">${list.slice(0, limit).map((r) => `
     <li class="row">
       <span class="emoji">${icon_[r.kind] || '🔔'}</span>
@@ -473,6 +477,8 @@ async function renderHome() {
         <button class="btn sm" data-handdown="${esc(h.itemId)}" data-to="${esc(h.toChildId)}">Pass to ${esc(h.toName)}</button></li>`).join('')}</ul></div>` : ''}
 
     ${choresHomeCard(d.chores)}
+
+    ${calendarHomeCard(d.calendar, d.trips)}
 
     <div class="card-head" style="margin:26px 0 12px" data-tool="clothes"><h2>Kids' clothes</h2><button class="btn sm" data-nav="clothes">Open wardrobes</button></div>
     ${d.clothes.length ? `<div class="grid g2" data-tool="clothes">${d.clothes.map((s, i) => kidCard(s, i)).join('')}</div>`
@@ -765,15 +771,20 @@ async function renderClothes() {
   const season = state.season || 'any';
   const weather = await todaysWeather();
   const wq = weather && weather.tempC !== null ? `&tempC=${weather.tempC}&rain=${weather.rain ? 1 : 0}` : '';
-  const [items, outfits, stats, targets, ootd, hmd] = await Promise.all([
+  const [items, outfits, stats, targets, ootd, hmd, swaps, cal] = await Promise.all([
     api('/clothes/items?childId=' + child.id),
     api(`/clothes/outfits/${child.id}?season=${season}&limit=60`),
     api('/clothes/stats'),
     api('/clothes/targets'),
     api(`/clothes/outfit-of-the-day/${child.id}?shuffle=${state.ootdIndex}${wq}`),
     api('/clothes/hand-me-downs'),
+    api('/clothes/swap').catch(() => []),
+    api('/calendar?days=2').catch(() => null),
   ]);
   state.targets = targets;
+  const swap = swaps.find((x) => x.childId === child.id);
+  // School and club kit today (PE, swimming), shown with the outfit.
+  const kitToday = cal ? cal.upcoming.filter((e) => e.date === cal.today && e.kit.length && (!e.who.length || e.who.includes(child.id))) : [];
   const s = stats.find((x) => x.childId === child.id);
   $('#page-sub').textContent = `${plural(items.length, 'item')} for ${child.name} · ${plural(outfits.total, 'outfit')}`;
   const inWash = items.filter((i) => i.inWash).length;
@@ -785,6 +796,7 @@ async function renderClothes() {
     const tags = [];
     if (it.inWash) tags.push('<span class="pill blue">In the wash</span>');
     if (it.uniform) tags.push('<span class="pill plain">Uniform</span>');
+    if (it.stored) tags.push('<span class="pill plain">📦 Packed away</span>');
     if (it.type !== 'shoes' && child.clothingSize && sizeIdx(it.size) >= 0) {
       const d = sizeIdx(it.size) - sizeIdx(child.clothingSize);
       if (d < 0) tags.push('<span class="pill bad">Outgrown</span>');
@@ -793,9 +805,9 @@ async function renderClothes() {
     return tags.join(' ');
   };
   const wf = state.wardrobeFilter;
-  const shownItems = items.filter((it) => wf === 'all' || (wf === 'wash' ? it.inWash : wf === 'uniform' ? it.uniform : it.type === wf));
+  const shownItems = items.filter((it) => wf === 'all' || (wf === 'wash' ? it.inWash : wf === 'uniform' ? it.uniform : wf === 'stored' ? it.stored : it.type === wf));
   const typesPresent = [...new Set(items.map((i) => i.type))];
-  const extraFilters = [...(inWash ? [['wash', '🧺 In wash']] : []), ...(items.some((i) => i.uniform) ? [['uniform', '🎒 Uniform']] : [])];
+  const extraFilters = [...(inWash ? [['wash', '🧺 In wash']] : []), ...(items.some((i) => i.uniform) ? [['uniform', '🎒 Uniform']] : []), ...(items.some((i) => i.stored) ? [['stored', '📦 Packed away']] : [])];
 
   // Outgrown things: pass to a sibling, or sell / give away.
   const passOn = hmd.filter((h) => h.fromChildId === child.id);
@@ -816,12 +828,16 @@ async function renderClothes() {
             ? `<div class="small" style="margin-top:6px">${weather.rain ? '🌧️' : weather.tempC < 12 ? '🧣' : weather.tempC >= 20 ? '☀️' : '⛅'} ${weather.min}° to ${weather.max}°${weather.place ? ' in ' + esc(weather.place) : ''}. ${esc(ootd.weather || '')}</div>`
             : state.family.location ? `<div class="small muted" style="margin-top:6px">Couldn't get the weather for ${esc(state.family.location.name)} right now, so this ignores it.</div>`
             : `<div class="small muted" style="margin-top:6px"><button class="btn ghost sm" data-nav="settings" style="padding:0">Add your town</button> for weather-aware outfits.</div>`}
+          ${kitToday.length ? `<div class="banner" style="margin-top:10px;background:var(--warn-soft);color:var(--warn)"><span style="font-size:20px">${esc(kitToday[0].emoji)}</span>
+            <div class="grow">${esc(kitToday.map((e) => e.title).join(' and '))} today<div class="small" style="font-weight:400">Take: ${esc([...new Set(kitToday.flatMap((e) => e.kit))].join(', '))}</div></div></div>` : ''}
           <div id="ootd-body">${ootdBody(o)}</div>
         </div>
         <span id="ootd-shuffle">${o && ootd.choices > 1 ? `<button class="btn" data-shuffle>${icon('shuffle')} Shuffle</button>` : ''}</span>
       </div>
       ${kidCard(s, kids.indexOf(child))}
     </div>
+
+    ${swap && (swap.due || swap.getOut.length || swap.outgrown.length) ? swapCard(swap) : ''}
 
     ${passOn.length || sellable.length ? `<div class="card" style="margin-top:16px">
       <div class="card-head"><h2>♻️ Outgrown</h2>${passAllButtons(passOn) || '<span class="muted small">Pass them on, sell or give away</span>'}</div>
@@ -865,6 +881,7 @@ async function renderClothes() {
             <div class="grow"><div class="title">${esc(it.name)} ${fitLabel(it)}</div>
               <div class="sub">${cap(esc(it.type))} · ${esc(it.size || 'no size')}${it.colour ? ' · ' + esc(it.colour) : ''}${it.pattern === 'patterned' ? ' · patterned' : ''}${it.season !== 'all' ? ' · ' + esc(it.season) : ''}</div></div>
             ${it.wornOut ? '' : `<button class="btn ghost sm" data-wash="${esc(it.id)}" data-state="${Boolean(it.inWash)}" title="${it.inWash ? 'Back in the drawer' : 'Put in the wash'}">${it.inWash ? 'Clean' : '🧺 Wash'}</button>`}
+            ${it.season !== 'all' || it.stored ? `<button class="btn ghost sm" data-store="${esc(it.id)}" data-state="${Boolean(it.stored)}" title="${it.stored ? 'Get it out again' : 'Pack it away until its season'}">${it.stored ? 'Unpack' : '📦'}</button>` : ''}
             <button class="btn ghost sm" data-worn="${esc(it.id)}" data-state="${it.wornOut}">${it.wornOut ? 'Mark OK' : 'Worn out'}</button>
             <button class="icon-btn danger" data-del-item="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">${icon('trash')}</button>
           </li>`).join('')}</ul>` : emptyState('🧺', 'No clothes here yet.')}
@@ -889,6 +906,23 @@ async function renderClothes() {
   if ((state.ai = await api('/ai/settings')).suggestions && o) aiOutfit(child.id, weather);
 }
 
+// Spring and autumn: pack away last season's clothes and get the new season's out.
+function swapCard(sw) {
+  const away = sw.season === 'summer' ? 'winter' : 'summer';
+  const names = (l) => l.slice(0, 6).map((i) => esc(i.name)).join(', ') + (l.length > 6 ? ` and ${l.length - 6} more` : '');
+  return `<div class="card" id="swap-card" style="margin-top:16px">
+    <div class="card-head"><h2>${sw.season === 'summer' ? '☀️' : '❄️'} Time for ${esc(sw.season)} clothes</h2>
+      <button class="btn sm primary" data-swap="${esc(sw.childId)}">Do the swap</button></div>
+    <ul class="list">
+      ${sw.packAway.length ? `<li class="row"><span class="emoji">📦</span><div class="grow"><div class="title">Pack away ${plural(sw.packAway.length, `${away} thing`)}</div><div class="sub">${names(sw.packAway)}</div></div></li>` : ''}
+      ${sw.getOut.length ? `<li class="row"><span class="emoji">👕</span><div class="grow"><div class="title">Get out ${plural(sw.getOut.length, `${sw.season} thing`)} that still fit</div><div class="sub">${names(sw.getOut)}</div></div></li>` : ''}
+      ${sw.outgrown.length ? `<li class="row"><span class="emoji">♻️</span><div class="grow"><div class="title">${plural(sw.outgrown.length, 'packed-away thing')} now too small</div><div class="sub">${names(sw.outgrown)}. They'll show under Outgrown to pass on.</div></div></li>` : ''}
+    </ul>
+    ${sw.short ? `<p class="hint" style="margin-top:8px">${esc(sw.name)} doesn't have many ${esc(sw.season)} clothes that fit. Check the shopping suggestions.</p>` : ''}
+    <p class="hint" style="margin-top:8px">Packed-away clothes stay in the wardrobe list but are left out of outfits.</p>
+  </div>`;
+}
+
 function listingText(it) {
   const age = String(it.size || '').replace(/Y$/, ' years').replace(/M$/, ' months');
   return `${it.name} – age ${age}\n\nChildren's ${it.type} in size ${it.size}${it.colour ? `, ${it.colour}` : ''}${it.pattern === 'patterned' ? ', patterned' : ''}. ` +
@@ -897,7 +931,7 @@ function listingText(it) {
 
 // ---------- shopping ----------
 async function renderShopping() {
-  const [data, spend] = await Promise.all([api('/shopping'), api('/spending')]);
+  const [data, spend, month] = await Promise.all([api('/shopping'), api('/spending'), api('/money').catch(() => null)]);
   const children = state.family.children;
   state.shoppingCount = data.items.filter((i) => !i.done).length;
   $('#page-sub').textContent = `${plural(state.shoppingCount, 'thing')} to buy · tick "Bought" and it goes straight into the cupboard or wardrobe`;
@@ -947,7 +981,7 @@ async function renderShopping() {
           : emptyState('🛒', 'Your list is empty. Add things, or use the suggestions.')}
       </div>
     </div>
-    <div style="margin-top:16px">${spendingCard(spend)}</div>`;
+    <div style="margin-top:16px">${spendingCard(spend, month)}</div>`;
   state.suggestions = data.suggestions;
   if ((state.ai = await api('/ai/settings')).suggestions) aiShopping();
 }
@@ -959,20 +993,37 @@ function personName(email, people = state.people || {}) {
   return cap(first || email);
 }
 
-function spendingCard(sp) {
+const SPEND_CATS = [['food', '🛒', 'Food'], ['clothes', '👕', 'Clothes'], ['household', '🧽', 'Household'], ['activities', '⚽', 'Clubs and days out'], ['other', '💷', 'Other']];
+function spendingCard(sp, m) {
   const vs = sp.lastMonth ? ` <span class="muted small">(last month ${moneyP(sp.lastMonth)})</span>` : '';
+  const cat = (k) => SPEND_CATS.find((c) => c[0] === (k || 'food')) || SPEND_CATS[0];
+  const pct = m && m.budget ? Math.min(100, Math.round((m.spent / m.budget) * 100)) : 0;
+  const tone = m && (m.status === 'over' || m.status === 'heading-over') ? 'short' : '';
+  const maxMonth = m ? Math.max(1, ...m.history.map((h) => h.total)) : 1;
   return `<div class="card" id="spending-card">
-    <div class="card-head"><h2>💷 Food spending</h2></div>
-    ${sp.entries.length ? `<p style="margin-top:4px"><strong style="font-size:1.4rem">${moneyP(sp.thisMonth)}</strong> this month${vs}</p>
+    <div class="card-head"><h2>💷 Spending</h2><button class="btn ghost sm" data-money-budget>${m && m.budget ? `Budget ${moneyP(m.budget)}` : 'Set a monthly budget'}</button></div>
+    ${m && m.spent ? `<div id="money-month" style="margin-top:4px">
+        <p><strong style="font-size:1.4rem">${moneyP(m.spent)}</strong> this month${m.budget ? ` of ${moneyP(m.budget)}` : ''}${m.lastMonth ? ` <span class="muted small">(last month ${moneyP(m.lastMonth)})</span>` : ''}</p>
+        ${m.budget ? `<div class="bar ${tone}" style="margin-top:8px"><span style="width:${pct}%"></span></div>
+          <p class="hint" style="margin-top:6px">${m.status === 'over' ? `Over budget by ${moneyP(-m.left)}.` : m.status === 'heading-over' ? `${moneyP(m.left)} left, but at this rate the month ends near ${moneyP(m.projected)}.` : `${moneyP(m.left)} left${m.isCurrent && m.projected > m.spent ? `, heading for about ${moneyP(m.projected)}` : ''}.`}</p>` : ''}
+        <div class="chips" style="margin-top:10px">${m.categories.filter((c) => c.total).map((c) => `<span class="pill plain">${esc(c.emoji)} ${esc(c.label)} ${moneyP(c.total)}</span>`).join('')}${m.pocketMoney ? `<span class="pill plain">⭐ Pocket money ${moneyP(m.pocketMoney)}</span>` : ''}</div>
+        <div class="money-history" style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;align-items:end;height:64px;margin-top:12px">${m.history.map((h) => `<div title="${esc(h.month)}: ${moneyP(h.total)}" style="display:flex;flex-direction:column;align-items:center;gap:2px;height:100%;justify-content:flex-end">
+          <span style="width:100%;border-radius:4px;background:${h.month === m.month ? 'var(--accent)' : 'var(--line)'};height:${Math.max(3, Math.round((h.total / maxMonth) * 44))}px"></span>
+          <span class="small muted">${esc(new Date(h.month + '-01T12:00:00Z').toLocaleDateString(undefined, { month: 'short' }))}</span></div>`).join('')}</div>
+        ${m.clothesAhead ? `<p class="hint" style="margin-top:8px">Coming up: about ${moneyP(m.clothesAhead)} of clothes the children need now.</p>` : ''}
+      </div>` : ''}
+    ${sp.entries.some((e) => !e.category) ? `<p style="margin-top:10px" class="small">Food: <strong>${moneyP(sp.thisMonth)}</strong> this month${vs}</p>
       <p class="hint" style="margin-top:4px">${[sp.perWeek != null && `About ${moneyP(sp.perWeek)} a week`, sp.perDinner != null && `roughly ${moneyP(sp.perDinner)} per dinner cooked (${sp.dinnersCooked} this month)`].filter(Boolean).join(', ') || 'Add a few shops to see a weekly average.'}</p>`
-      : '<p class="hint">Add the total from each receipt to see what food costs you each week and month.</p>'}
-    <form id="spend-form" class="form-row" style="grid-template-columns:1fr 1fr auto;margin-top:12px">
+      : sp.entries.length ? '' : '<p class="hint">Add the total from each receipt to see what you spend each week and month, and what each dinner costs.</p>'}
+    <form id="spend-form" class="form-row" style="grid-template-columns:1fr 1fr;margin-top:12px">
       <input name="amount" inputmode="decimal" placeholder="£ total" aria-label="Amount" required>
+      <select name="category" aria-label="What for">${SPEND_CATS.map(([k, e, l]) => `<option value="${esc(k)}">${esc(e)} ${esc(l)}</option>`).join('')}</select>
       <input name="shop" placeholder="Shop" aria-label="Shop (optional)">
       <button class="btn">${icon('plus')} Add</button>
     </form>
     ${sp.entries.length ? `<ul class="list" style="margin-top:8px">${sp.entries.slice(0, 6).map((e) => `<li class="row">
-      <div class="grow"><div class="title">${moneyP(e.amount)}${e.shop ? ` · ${esc(e.shop)}` : ''}</div><div class="sub">${esc(fmtDate(e.date))}${e.addedBy && e.addedBy !== ACCOUNT?.status().email ? ` · ${esc(personName(e.addedBy))}` : ''}</div></div>
+      <span class="emoji">${esc(cat(e.category)[1])}</span>
+      <div class="grow"><div class="title">${moneyP(e.amount)}${e.shop ? ` · ${esc(e.shop)}` : ''}</div><div class="sub">${esc(fmtDate(e.date))} · ${esc(cat(e.category)[2])}${e.addedBy && e.addedBy !== ACCOUNT?.status().email ? ` · ${esc(personName(e.addedBy))}` : ''}</div></div>
       <button class="icon-btn danger" data-del-spend="${esc(e.id)}" aria-label="Remove ${moneyP(e.amount)}">${icon('x')}</button></li>`).join('')}</ul>` : ''}
   </div>`;
 }
@@ -1067,6 +1118,22 @@ const dayName = (date, today) => {
   return d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long' });
 };
 
+// The week's plans on Home: school and club days with their kit, birthdays, trips.
+function calendarHomeCard(c, trips = []) {
+  if (!c || (!c.week.length && !trips.length)) return '';
+  const soonTrips = trips.filter((t) => t.start <= isoDay(Date.now() + 14 * 86400000));
+  return `<div class="card" style="margin-top:16px" id="calendar-home" data-tool="calendar">
+    <div class="card-head"><h2>📅 This week</h2><button class="btn sm" data-nav="calendar">Calendar</button></div>
+    <ul class="list">${c.week.slice(0, 6).map((o) => `<li class="row"><span class="emoji">${esc(o.emoji)}</span>
+      <div class="grow"><div class="title">${esc(o.title)}${o.time ? ` <span class="pill plain">${esc(o.time)}</span>` : ''}</div>
+      <div class="sub">${esc(dayLabel(o.date, c.today))}${o.whoNames.length ? ` · ${esc(o.whoNames.join(', '))}` : ''}${o.kit.length ? ` · take ${esc(o.kit.join(', '))}` : ''}</div></div></li>`).join('')}
+      ${soonTrips.map((t) => `<li class="row"><span class="emoji">🧳</span><div class="grow"><div class="title">${esc(t.name)}</div>
+        <div class="sub">${esc(dayLabel(t.start, c.today))} · ${esc(t.packed)}/${esc(t.items)} packed</div></div>
+        <button class="btn sm" data-nav="calendar" data-cal-trips>Packing list</button></li>`).join('')}</ul>
+    ${c.week.length > 6 ? `<p class="hint" style="margin-top:8px">and ${c.week.length - 6} more this week</p>` : ''}
+  </div>`;
+}
+
 function choresHomeCard(c) {
   if (!c || (!c.todayList.length && !c.doneToday)) return '';
   return `<div class="card" style="margin-top:16px" id="chores-home" data-tool="chores">
@@ -1109,6 +1176,7 @@ async function renderChores() {
   state.chores = v;
   state.choreIdeas = v.suggestions;
   const s = v.stats;
+  if (state.family.children.length) $('#page-actions').innerHTML = `<button class="btn" data-nav="kids">${icon('people')} Kids' view</button>`;
   $('#page-sub').textContent = s.dueToday ? `${plural(s.dueToday, 'chore')} to do today${s.overdue ? `, ${s.overdue} overdue` : ''}` : v.chores.length ? 'All done for today' : 'Share the housework out fairly';
   const today = v.rota[0];
   const doneToday = v.recent.filter((e) => e.at.slice(0, 10) === v.today);
@@ -1286,6 +1354,7 @@ document.addEventListener('click', guard(async (e) => {
   const t = e.target.closest('button');
   if (!t) return;
   const d = t.dataset;
+  if (t.hasAttribute('data-cal-trips')) state.calView = 'trips';
   if (d.nav) return go(d.nav);
   if (d.foodView) { state.foodView = d.foodView; return renderFood(); }
   if (d.mealFilter) { state.mealFilter = d.mealFilter; return renderFood(); }
@@ -1401,6 +1470,72 @@ document.addEventListener('click', guard(async (e) => {
   if (d.passAll) {
     const r = await api('/clothes/hand-down-all', { method: 'POST', body: { toChildId: d.passAll, fromChildId: d.from || null } });
     toast(`Passed on ${plural(r.moved, 'thing')}`);
+    return refresh();
+  }
+  if (d.calView) { state.calView = d.calView; return renderCalendar(); }
+  if (t.hasAttribute('data-cal-more')) { state.calDays = 42; return renderCalendarList(); }
+  if (d.calStarter) return calendarStarter(d.calStarter);
+  if (d.calEdit) return calendarEdit(d.calEdit);
+  if (d.calDel) {
+    const e = state.calendar.events.find((x) => x.id === d.calDel);
+    if (!(await ask({ title: `Remove ${e ? e.title : 'this'}?`, body: e && e.repeat !== 'none' ? '<p class="muted">Every date of it goes. To miss just one, use Skip in Coming up.</p>' : '', ok: 'Remove', danger: true }))) return;
+    await api('/calendar/events/' + encodeURIComponent(d.calDel), { method: 'DELETE' });
+    toast('Removed');
+    return renderCalendarList();
+  }
+  if (d.calSkip) {
+    await api(`/calendar/events/${encodeURIComponent(d.calSkip)}/skip`, { method: 'POST', body: { date: d.date } });
+    toast('Skipped that one');
+    return renderCalendarList();
+  }
+  if (d.trip) { state.tripId = d.trip; return renderTrips(); }
+  if (d.packToggle) {
+    await api(`/packing/trips/${encodeURIComponent(state.tripId)}/items/${encodeURIComponent(d.packToggle)}`, { method: 'PUT', body: { packed: d.state !== 'true' } });
+    return renderTrips();
+  }
+  if (d.packDel) {
+    await api(`/packing/trips/${encodeURIComponent(state.tripId)}/items/${encodeURIComponent(d.packDel)}`, { method: 'DELETE' });
+    return renderTrips();
+  }
+  if (t.hasAttribute('data-trip-rebuild')) {
+    t.disabled = true;
+    if (!(await aiPacking(state.tripId, true))) await api(`/packing/trips/${encodeURIComponent(state.tripId)}/rebuild`, { method: 'POST', body: {} });
+    toast('List made again. Ticked things stay ticked.');
+    return renderTrips();
+  }
+  if (t.hasAttribute('data-trip-reset')) {
+    await api(`/packing/trips/${encodeURIComponent(state.tripId)}/reset`, { method: 'POST', body: {} });
+    return renderTrips();
+  }
+  if (d.tripDel) {
+    if (!(await ask({ title: 'Delete this trip?', body: '<p class="muted">Its packing list goes too.</p>', ok: 'Delete', danger: true }))) return;
+    await api('/packing/trips/' + encodeURIComponent(d.tripDel), { method: 'DELETE' });
+    state.tripId = null;
+    return renderTrips();
+  }
+  if (d.kidView !== undefined) { state.kidView = d.kidView || null; return renderKids(); }
+  if (d.kidDone) {
+    const r = await api(`/chores/${encodeURIComponent(d.kidDone)}/done`, { method: 'POST', body: { by: state.kidView } });
+    toast(`Well done! ${r.entry.effort === 1 ? '1 point' : r.entry.effort + ' points'} ⭐`);
+    return renderKids();
+  }
+  if (d.swap) {
+    const r = await api('/clothes/swap/' + encodeURIComponent(d.swap), { method: 'POST', body: {} });
+    toast(`Swapped. ${cap(r.season)} clothes are out.`);
+    return renderClothes();
+  }
+  if (d.store) {
+    await api('/clothes/items/' + encodeURIComponent(d.store), { method: 'PUT', body: { stored: d.state !== 'true' } });
+    toast(d.state === 'true' ? 'Back in the wardrobe' : 'Packed away');
+    return renderClothes();
+  }
+  if (t.hasAttribute('data-money-budget')) {
+    const m = await api('/money');
+    const got = await ask({ title: 'Monthly budget', body: '<p class="muted">Everything you record here, plus pocket money. The app warns you when the month is heading over. Leave empty for no budget.</p>' +
+      field('budget', 'Budget each month (£)', 'text', m.budget ? String(m.budget) : '', 'inputmode="decimal" placeholder="e.g. 700"'), ok: 'Save' });
+    if (!got) return;
+    await api('/money/budget', { method: 'PUT', body: { budget: got.budget || 0 } });
+    toast(Number(got.budget) ? 'Budget saved' : 'No budget');
     return refresh();
   }
   if (d.delSpend) {
@@ -1554,9 +1689,31 @@ document.addEventListener('submit', guard(async (e) => {
     await api('/chores/settings', { method: 'PUT', body: { perPoint: Number(body.perPoint || 0) } });
     toast(Number(body.perPoint) ? `${body.perPoint}p a point` : 'Points only, no pocket money');
     await refresh();
+  } else if (form.id === 'cal-form') {
+    await api('/calendar/events', { method: 'POST', body: { ...body, who: checked(form, 'who'), time: body.time || null } });
+    toast('Added to the calendar');
+    await renderCalendarList();
+  } else if (form.id === 'trip-form') {
+    const btn = form.querySelector('button.primary');
+    btn.disabled = true;
+    try {
+      const forecast = body.feel ? null : await tripWeather(body.destination, body.start, body.end);
+      const weather = forecast ? { ...forecast, rain: forecast.rain || Boolean(body.rain) } : { feel: body.feel || null, rain: Boolean(body.rain) };
+      const trip = await api('/packing/trips', { method: 'POST', body: { name: body.name, destination: body.destination, start: body.start, end: body.end, who: checked(form, 'who'), abroad: Boolean(body.abroad), weather } });
+      state.tripId = trip.id;
+      await renderTrips();
+      if (await aiPacking(trip.id)) await renderTrips();
+      toast('Packing list ready');
+    } finally {
+      btn.disabled = false;
+    }
+  } else if (form.id === 'pack-form') {
+    await api(`/packing/trips/${encodeURIComponent(state.tripId)}/items`, { method: 'POST', body });
+    await renderTrips();
+    $('#pack-form input[name=name]')?.focus();
   } else if (form.id === 'spend-form') {
     await api('/spending', { method: 'POST', body });
-    toast('Added to food spending');
+    toast(body.category && body.category !== 'food' ? 'Added to spending' : 'Added to food spending');
     await refresh();
   } else if (form.id === 'shop-form') {
     await api('/shopping/items', { method: 'POST', body: { ...body, childId: body.childId || null } });
@@ -2118,6 +2275,292 @@ document.addEventListener('submit', guard(async (e) => {
   toast(state.family.name ? `Saved: ${state.family.name}` : 'Name cleared');
 }));
 
+// ---------- calendar and trips ----------
+// School and club days (with the kit to pack), birthdays, one-off events and trips away.
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const REPEAT_LABEL = { none: 'Once', weekly: 'Every week', yearly: 'Every year' };
+const isoDay = (d = new Date()) => new Date(d).toISOString().slice(0, 10);
+const dayLabel = (date, today) => {
+  const n = Math.round((new Date(date + 'T12:00:00Z') - new Date(today + 'T12:00:00Z')) / 86400000);
+  if (n === 0) return 'Today';
+  if (n === 1) return 'Tomorrow';
+  return new Date(date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: n < 7 ? 'long' : 'short', day: 'numeric', month: 'short' });
+};
+const kidChecks = (selected = []) => state.family.children.length
+  ? `<div class="field" style="margin-top:10px">Who<div class="chips" style="margin-top:4px">${state.family.children.map((c) =>
+    `<label class="chip"><input type="checkbox" name="who" value="${esc(c.id)}" ${selected.includes(c.id) ? 'checked' : ''} style="width:auto"> ${esc(c.name)}</label>`).join('')}</div>
+    <span class="hint">Leave empty for the whole family.</span></div>` : '';
+const dayChecks = (selected = []) => `<div class="field" style="margin-top:10px">Which days<div class="chips" style="margin-top:4px">${[1, 2, 3, 4, 5, 6, 0].map((d) =>
+  `<label class="chip"><input type="checkbox" name="days" value="${d}" ${selected.includes(d) ? 'checked' : ''} style="width:auto"> ${WEEKDAYS[d]}</label>`).join('')}</div></div>`;
+// formData keeps only the last of several boxes with one name, so read checkboxes directly.
+const checked = (root, name) => [...root.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
+
+async function renderCalendar() {
+  const view = state.calView || 'calendar';
+  $('#page').innerHTML = `
+    <div class="seg" style="margin-bottom:16px">${[['calendar', '📅 Calendar'], ['trips', '🧳 Trips']].map(([k, l]) =>
+      `<button data-cal-view="${k}" class="${view === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+    <div id="cal-body"></div>`;
+  return view === 'trips' ? renderTrips() : renderCalendarList();
+}
+
+async function renderCalendarList() {
+  const days = state.calDays || 14;
+  const c = await api('/calendar?days=' + days);
+  state.calendar = c;
+  const kitCount = c.kitTomorrow.reduce((n, g) => n + g.items.length, 0);
+  $('#page-sub').textContent = c.upcoming.length ? `${plural(c.upcoming.filter((o) => o.date <= isoDay(Date.now() + 6 * 86400000)).length, 'thing')} this week` : 'School days, clubs, birthdays and plans';
+  const byDay = new Map();
+  for (const o of c.upcoming) byDay.set(o.date, [...(byDay.get(o.date) || []), o]);
+  const ev = (id) => c.events.find((e) => e.id === id);
+  $('#cal-body').innerHTML = `
+    <div class="split">
+      <div class="stack">
+        <div class="card" id="cal-upcoming">
+          <div class="card-head"><h2>Coming up</h2><span class="muted small">Next ${days === 14 ? 'two' : 'six'} weeks</span></div>
+          ${byDay.size ? [...byDay].map(([date, list]) => `<div class="group-title">${esc(dayLabel(date, c.today))}</div>
+            <ul class="list">${list.map((o) => `<li class="row">
+              <span class="emoji">${esc(o.emoji)}</span>
+              <div class="grow"><div class="title">${esc(o.title)}${o.time ? ` <span class="pill plain">${esc(o.time)}</span>` : ''}</div>
+                <div class="sub">${[o.whoNames.join(', '), o.kit.length ? `Take: ${o.kit.join(', ')}` : '', o.notes || ''].filter(Boolean).map(esc).join(' · ')}</div></div>
+              ${o.eventId && ev(o.eventId)?.repeat === 'weekly' ? `<button class="btn ghost sm" data-cal-skip="${esc(o.eventId)}" data-date="${esc(o.date)}" title="Not happening this time">Skip</button>` : ''}
+            </li>`).join('')}</ul>`).join('')
+            + (days === 14 && c.upcoming.length ? '<p style="margin-top:10px"><button class="btn sm" data-cal-more>Show the next six weeks</button></p>' : '')
+            : emptyState('📅', 'Nothing coming up yet. Add school and club days, or anything else, and the app reminds you the day before.')}
+        </div>
+      </div>
+      <div class="stack">
+        <div class="card" id="cal-kit">
+          <div class="card-head"><h2>🎒 Bags for tomorrow</h2>${kitCount ? `<span class="muted small">${plural(kitCount, 'thing')}</span>` : ''}</div>
+          ${c.kitTomorrow.length ? `<ul class="list">${c.kitTomorrow.map((g) => `<li class="row"><div class="grow"><div class="title">${esc(g.name)} · ${esc(g.events.join(', '))}</div><div class="sub">${esc(g.items.join(', '))}</div></div></li>`).join('')}</ul>`
+            : '<p class="hint">Nothing special to pack for tomorrow.</p>'}
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Add a school or club day</h2></div>
+          <p class="hint">Pick one, then choose the day and who it's for. The kit list can be changed.</p>
+          <div class="chips" style="margin-top:8px">${c.starters.map((s) => `<button class="chip" data-cal-starter="${esc(s.key)}">${esc(s.emoji)} ${esc(s.title)}</button>`).join('')}</div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Add something else</h2></div>
+          <form id="cal-form" class="stack">
+            <label class="field">What<input name="title" placeholder="e.g. Parents' evening" required></label>
+            <div class="form-row" style="grid-template-columns:1fr 1fr 1fr">
+              <label class="field">Date<input name="date" type="date" value="${esc(c.today)}" required></label>
+              <label class="field">Time<input name="time" type="time"></label>
+              <label class="field">Repeats<select name="repeat">${Object.entries(REPEAT_LABEL).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+            </div>
+            ${kidChecks()}
+            <label class="field">Things to take<input name="kit" placeholder="e.g. Costume, packed lunch (optional)"></label>
+            <button class="btn primary">${icon('plus')} Add to the calendar</button>
+          </form>
+        </div>
+        ${c.events.length ? `<div class="card" id="cal-events">
+          <div class="card-head"><h2>Everything you've added</h2><span class="muted small">${plural(c.events.length, 'event')}</span></div>
+          <ul class="list">${c.events.map((e) => `<li class="row ${e.paused ? 'done' : ''}">
+            <span class="emoji">${esc(e.emoji || '📅')}</span>
+            <div class="grow"><div class="title">${esc(e.title)}</div>
+              <div class="sub">${esc(e.repeat === 'weekly' ? `Every ${e.days.map((d) => WEEKDAYS[d]).join(', ')}` : e.repeat === 'yearly' ? `Every year on ${fmtShort(e.date)}` : fmtDate(e.date))}${e.time ? ` at ${esc(e.time)}` : ''}${e.who.length ? ` · ${esc(e.who.map((id) => state.family.children.find((k) => k.id === id)?.name).filter(Boolean).join(', '))}` : ''}${e.paused ? ' · paused' : ''}</div></div>
+            <button class="icon-btn" data-cal-edit="${esc(e.id)}" aria-label="Change ${esc(e.title)}">${icon('edit')}</button>
+            <button class="icon-btn danger" data-cal-del="${esc(e.id)}" aria-label="Remove ${esc(e.title)}">${icon('trash')}</button></li>`).join('')}</ul>
+          <p class="hint" style="margin-top:8px">Birthdays come from each child's birth date on the Family page.</p>
+        </div>` : ''}
+      </div>
+    </div>`;
+}
+
+async function calendarStarter(key) {
+  const s = state.calendar.starters.find((x) => x.key === key);
+  const got = await ask({
+    title: `${s.emoji} ${s.title}`,
+    body: (s.repeat === 'weekly' ? dayChecks([new Date().getDay() || 1]) : field('date', 'Date', 'date', isoDay())) + kidChecks() +
+      field('kit', 'Things to take', 'text', s.kit.join(', ')) + field('time', 'Time (optional)', 'time', ''),
+    ok: 'Add',
+  });
+  if (!got) return;
+  const form = $('#dialog-form');
+  const body = { starter: key, who: checked(form, 'who'), kit: got.kit, time: got.time || null };
+  if (s.repeat === 'weekly') {
+    body.days = checked(form, 'days').map(Number);
+    if (!body.days.length) return toast('Pick at least one day');
+  } else body.date = got.date;
+  await api('/calendar/events', { method: 'POST', body });
+  toast(`${s.title} added`);
+  renderCalendarList();
+}
+
+async function calendarEdit(id) {
+  const e = state.calendar.events.find((x) => x.id === id);
+  const got = await ask({
+    title: 'Change event',
+    body: field('title', 'What', 'text', e.title) +
+      (e.repeat === 'weekly' ? dayChecks(e.days) : field('date', 'Date', 'date', e.date)) +
+      field('time', 'Time', 'time', e.time || '') + kidChecks(e.who) + field('kit', 'Things to take', 'text', e.kit.join(', ')) +
+      (e.repeat === 'weekly' ? field('until', 'Stops after (optional)', 'date', e.until || '') : '') +
+      `<label class="field" style="margin-top:10px"><span><input type="checkbox" name="paused" ${e.paused ? 'checked' : ''} style="width:auto"> Pause it for now</span></label>`,
+    ok: 'Save',
+  });
+  if (!got) return;
+  const form = $('#dialog-form');
+  const body = { title: got.title, time: got.time || null, who: checked(form, 'who'), kit: got.kit, paused: Boolean(got.paused) };
+  if (e.repeat === 'weekly') Object.assign(body, { days: checked(form, 'days').map(Number), until: got.until || null });
+  else body.date = got.date;
+  await api('/calendar/events/' + encodeURIComponent(id), { method: 'PUT', body });
+  toast('Saved');
+  renderCalendarList();
+}
+
+// ---------- trips and packing ----------
+async function renderTrips() {
+  const { trips } = await api('/packing');
+  state.trips = trips;
+  const today = isoDay();
+  const upcoming = trips.filter((t) => t.end >= today);
+  const past = trips.filter((t) => t.end < today);
+  if (!trips.some((t) => t.id === state.tripId)) state.tripId = upcoming[0]?.id || null;
+  const trip = trips.find((t) => t.id === state.tripId);
+  $('#page-sub').textContent = upcoming.length ? `${plural(upcoming.length, 'trip')} coming up` : 'Packing lists for trips away';
+  $('#cal-body').innerHTML = `
+    <div class="split">
+      <div class="stack">${trip ? tripCard(trip) : `<div class="card">${emptyState('🧳', 'No trips planned. Add one and the app writes the packing list for everyone going, from the weather and each child\'s own clothes.')}</div>`}</div>
+      <div class="stack">
+        ${trips.length ? `<div class="card"><div class="card-head"><h2>Trips</h2></div><ul class="list">${[...upcoming, ...past].map((t) => `<li class="row ${t.end < today ? 'done' : ''}">
+          <span class="emoji">🧳</span>
+          <div class="grow"><div class="title">${esc(t.name)}</div><div class="sub">${esc(fmtShort(t.start))} to ${esc(fmtShort(t.end))} · ${esc(t.packedCount)}/${esc(t.items.length)} packed</div></div>
+          ${t.id === state.tripId ? '<span class="pill">Showing</span>' : `<button class="btn ghost sm" data-trip="${esc(t.id)}">Open</button>`}</li>`).join('')}</ul></div>` : ''}
+        <div class="card">
+          <div class="card-head"><h2>Plan a trip</h2></div>
+          <form id="trip-form" class="stack">
+            <label class="field">Name<input name="name" placeholder="e.g. Half term in Cornwall" required></label>
+            <label class="field">Where to (optional)<input name="destination" placeholder="e.g. St Ives"></label>
+            <div class="form-row" style="grid-template-columns:1fr 1fr">
+              <label class="field">Going<input name="start" type="date" value="${esc(today)}" required></label>
+              <label class="field">Coming back<input name="end" type="date" value="${esc(isoDay(Date.now() + 2 * 86400000))}" required></label>
+            </div>
+            ${kidChecks(state.family.children.map((c) => c.id))}
+            <div class="form-row" style="grid-template-columns:1fr 1fr">
+              <label class="field">Weather<select name="feel"><option value="">Work it out</option><option value="hot">Hot</option><option value="mild">Mild</option><option value="cold">Cold</option></select></label>
+              <div class="field">&nbsp;<div class="chips"><label class="chip"><input type="checkbox" name="rain" style="width:auto"> Rain likely</label><label class="chip"><input type="checkbox" name="abroad" style="width:auto"> Abroad</label></div></div>
+            </div>
+            <p class="hint">"Work it out" checks the forecast for where you're going when the trip is within two weeks, and otherwise guesses from the time of year.</p>
+            <button class="btn primary">${icon('plus')} Make the packing list</button>
+          </form>
+        </div>
+      </div>
+    </div>`;
+}
+
+function tripCard(t) {
+  const groups = new Map();
+  for (const it of t.items) groups.set(it.group, [...(groups.get(it.group) || []), it]);
+  const w = t.weatherUsed;
+  const pct = t.items.length ? Math.round((t.packedCount / t.items.length) * 100) : 0;
+  return `<div class="card" id="trip-card">
+    <div class="card-head"><h2>🧳 ${esc(t.name)}</h2><span id="trip-by">${t.by ? `<span class="pill blue">✨ ${esc(t.by)}</span>` : ''}</span></div>
+    <p class="muted small">${esc(fmtDate(t.start))} to ${esc(fmtDate(t.end))} · ${plural(t.nights, 'night')}${t.destination ? ` · ${esc(t.destination)}` : ''} ·
+      ${w.feel === 'hot' ? '☀️ hot' : w.feel === 'cold' ? '🧣 cold' : '⛅ mild'}${w.tempC != null ? ` (about ${esc(w.tempC)}°)` : ''}${w.rain ? ', rain likely' : ''}${w.guessed ? ' (a guess from the time of year)' : ''}</p>
+    <div class="bar" style="margin-top:10px"><span style="width:${pct}%"></span></div>
+    <p class="hint" style="margin-top:4px">${esc(t.packedCount)} of ${esc(t.items.length)} packed</p>
+    ${[...groups].map(([g, list]) => `<div class="group-title">${esc(g)}</div><ul class="list">${list.map((it) => `<li class="row ${it.packed ? 'done' : ''}">
+      <button class="check ${it.packed ? 'on' : ''}" data-pack-toggle="${esc(it.id)}" data-state="${it.packed}" aria-label="${it.packed ? 'Unpack' : 'Packed'} ${esc(it.name)}">${icon('check')}</button>
+      <div class="grow"><div class="title">${it.qty > 1 ? `${esc(it.qty)} × ` : ''}${esc(it.name)}</div>${it.detail ? `<div class="sub">${esc(it.detail)}</div>` : ''}</div>
+      <button class="icon-btn danger" data-pack-del="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">${icon('x')}</button></li>`).join('')}</ul>`).join('')}
+    <form id="pack-form" class="form-row" style="grid-template-columns:2fr 1fr auto;margin-top:12px">
+      <input name="name" placeholder="Add something" aria-label="Item" required>
+      <select name="group" aria-label="For">${[...new Set(['Everyone', ...groups.keys()])].map((g) => `<option>${esc(g)}</option>`).join('')}</select>
+      <button class="btn">${icon('plus')}</button>
+    </form>
+    <p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn sm" data-trip-rebuild>${state.ai?.suggestions ? '✨ Ask the AI again' : 'Start the list again'}</button>
+      ${t.packedCount ? '<button class="btn sm" data-trip-reset>Untick all (for the way home)</button>' : ''}
+      <button class="btn sm ghost danger" data-trip-del="${esc(t.id)}">Delete trip</button>
+    </p>
+  </div>`;
+}
+
+// The forecast for a destination, when the trip starts within the forecast's two weeks.
+async function tripWeather(place, start, end) {
+  const days = Math.round((new Date(start + 'T12:00:00Z') - new Date(isoDay() + 'T12:00:00Z')) / 86400000);
+  if (!place || days < 0 || days > 13) return null;
+  try {
+    const g = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1&language=en&format=json`).then((x) => x.json());
+    const loc = g.results && g.results[0];
+    if (!loc) return null;
+    const j = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&daily=temperature_2m_max,precipitation_probability_max&timezone=auto&start_date=${start}&end_date=${end < isoDay(Date.now() + 15 * 86400000) ? end : isoDay(Date.now() + 15 * 86400000)}`).then((x) => x.json());
+    const max = j.daily.temperature_2m_max.filter((n) => n != null);
+    if (!max.length) return null;
+    const avg = Math.round(max.reduce((a, b) => a + b, 0) / max.length);
+    const rain = j.daily.precipitation_probability_max.some((p) => p >= 50);
+    return { feel: avg >= 20 ? 'hot' : avg < 12 ? 'cold' : 'mild', tempC: avg, rain };
+  } catch {
+    return null;
+  }
+}
+
+// With an AI on, it writes the trip's list; what's already ticked stays ticked.
+async function aiPacking(tripId, refresh = false) {
+  if (!(state.ai || (state.ai = await api('/ai/settings'))).suggestions) return false;
+  const by = $('#trip-by');
+  if (by) by.innerHTML = '<span class="muted small">✨ Asking the AI to write the list…</span>';
+  const r = await aiSuggest('packing', { tripId }, { refresh });
+  if (!r || r.error || !r.items?.length) {
+    if (by) by.innerHTML = r?.error ? `<span class="muted small">The AI couldn't help just now, so this list comes from the app's own rules.</span>` : '';
+    return false;
+  }
+  await api(`/packing/trips/${encodeURIComponent(tripId)}/rebuild`, { method: 'POST', body: { items: r.items, by: r.by } });
+  return true;
+}
+
+// ---------- kids' own view ----------
+// Big buttons for children: their chores today, points, what to take, tonight's dinner.
+async function renderKids() {
+  const [cv, cal, d] = await Promise.all([api('/chores'), api('/calendar?days=2'), api('/dashboard')]);
+  state.chores = cv;
+  const kids = state.family.children;
+  document.body.classList.add('kids-mode');
+  if (!kids.length) {
+    $('#page').innerHTML = `<div class="card">${emptyState('👶', 'Add the children on the Family page first.', '<button class="btn primary" data-nav="family">Family</button>')}</div>`;
+    return;
+  }
+  if (!kids.some((c) => c.id === state.kidView)) state.kidView = null;
+  const pick = !state.kidView;
+  const child = kids.find((c) => c.id === state.kidView);
+  const exit = `<button class="btn" data-nav="${look.start === 'kids' ? 'settings' : 'chores'}">${icon('x')} ${look.start === 'kids' ? 'Settings' : 'Grown-ups'}</button>`;
+  if (pick) {
+    $('#page').innerHTML = `<div class="kids-head"><h1>Who's this?</h1>${exit}</div>
+      <div class="kids-pick">${kids.map((c, i) => `<button class="kids-who" data-kid-view="${esc(c.id)}">${avatar(c, i)}<span>${esc(c.name)}</span></button>`).join('')}</div>`;
+    return;
+  }
+  const i = kids.indexOf(child);
+  const mine = cv.rota[0].items.filter((it) => it.who === child.id);
+  const doneToday = cv.recent.filter((e) => e.at.slice(0, 10) === cv.today && e.by === child.id);
+  const tot = cv.totals.find((t) => t.id === child.id) || { points: 0, done: 0 };
+  const kit = cal.upcoming.filter((o) => o.kit.length && (!o.who.length || o.who.includes(child.id)) && o.date <= isoDay(Date.now() + 86400000));
+  const birthday = cal.upcoming.find((o) => o.kind === 'birthday' && o.who.includes(child.id) && o.date === cal.today);
+  const tonight = d.food.plan[0];
+  $('#page').innerHTML = `
+    <div class="kids-head">
+      <h1>${avatar(child, i)} Hi ${esc(child.name)}!${birthday ? ' 🎂 Happy birthday!' : ''}</h1>
+      <div style="display:flex;gap:8px"><button class="btn" data-kid-view="">Switch</button>${exit}</div>
+    </div>
+    <div class="kids-grid">
+      <section class="card kids-card">
+        <h2>🧹 Your jobs today</h2>
+        ${mine.length ? mine.map((it) => `<button class="kids-job" data-kid-done="${esc(it.choreId)}">
+          <span class="kids-job-emoji">${esc(it.emoji || '🧹')}</span><span class="grow">${esc(it.name)}</span><span class="kids-tick">${icon('check')} Done!</span></button>`).join('')
+          : `<p class="kids-big">${doneToday.length ? '🎉 All done. Brilliant!' : 'No jobs today. 😎'}</p>`}
+        ${doneToday.length && mine.length ? `<p class="muted" style="margin-top:8px">Done already: ${esc(doneToday.map((e) => e.name).join(', '))}</p>` : ''}
+      </section>
+      <section class="card kids-card">
+        <h2>⭐ This week</h2>
+        <p class="kids-points">${esc(tot.points)}<span> point${tot.points === 1 ? '' : 's'}</span></p>
+        ${tot.money != null ? `<p class="kids-big">💰 ${moneyP(tot.money)} pocket money</p>` : ''}
+        <p class="muted">${plural(tot.done, 'job')} done this week</p>
+      </section>
+      ${kit.length ? `<section class="card kids-card"><h2>🎒 Remember</h2>${kit.map((o) => `<p class="kids-big">${esc(o.emoji)} ${esc(o.title)} ${o.date === cal.today ? 'today' : 'tomorrow'}</p><p class="muted">${esc(o.kit.join(', '))}</p>`).join('')}</section>` : ''}
+      ${tonight && !look.hidden.includes('food') ? `<section class="card kids-card"><h2>🍽️ Tonight's dinner</h2><p class="kids-big">${MEAL_EMOJI(tonight.name)} ${esc(tonight.name)}</p></section>` : ''}
+    </div>`;
+}
+
 // ---------- kitchen screen ----------
 // Full screen, big text, no tabs. Refreshes itself every minute (and straight away when
 // someone else changes something); a tap ticks off a chore or a shopping item.
@@ -2161,6 +2604,9 @@ async function renderKitchen() {
         ? `<div class="k-garments">${o.items.map((g) => `<span class="k-garment" title="${esc(g.name)}"><span class="tile" style="background:${esc(cssColour(g.colour))}">${GARMENT[g.type] || '👕'}</span>${esc(g.name)}</span>`).join('')}</div>`
         : '<p class="muted small">No clean outfit that fits.</p>'}</div>`;
     }).join('')}</div>`),
+    calendar: () => off('calendar') || !(d.calendar.todayList.length || d.calendar.tomorrowList.length) ? '' : panel('calendar', '📅 Today and tomorrow',
+      `<ul class="list">${[...d.calendar.todayList, ...d.calendar.tomorrowList].slice(0, 8).map((o) => `<li class="row"><span class="emoji">${esc(o.emoji)}</span>
+        <div class="grow"><div class="title">${esc(o.title)}${o.time ? ` · ${esc(o.time)}` : ''}</div><div class="sub">${esc(o.date === d.calendar.today ? 'Today' : 'Tomorrow')}${o.whoNames.length ? ` · ${esc(o.whoNames.join(', '))}` : ''}${o.kit.length ? ` · take ${esc(o.kit.join(', '))}` : ''}</div></div></li>`).join('')}</ul>`),
     reminders: () => !d.reminders.length ? '' : panel('reminders', '🔔 Reminders', reminderList(d.reminders, 4)),
     week: () => off('food') ? '' : panel('week', "📅 The week's dinners", weekStrip(d.food.plan)),
   };

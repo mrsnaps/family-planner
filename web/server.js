@@ -10,6 +10,9 @@ const food = require('./modules/food');
 const clothes = require('./modules/clothes');
 const shopping = require('./modules/shopping');
 const chores = require('./modules/chores');
+const calendar = require('./modules/calendar');
+const packing = require('./modules/packing');
+const money = require('./modules/money');
 const ai = require('./modules/ai');
 const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
@@ -45,25 +48,35 @@ function createApp(store) {
   });
 
   const choresApi = chores.register(router, store, fam.summary);
+  const calendarApi = calendar.register(router, store, fam.summary);
+  const packingApi = packing.register(router, store, {
+    family: fam.summary,
+    adultNames: () => choresApi.people().filter((p) => p.adult).map((p) => p.name),
+    clothesItems: clothesApi.items,
+  });
+  const moneyApi = money.register(router, store, { spending: shoppingApi.spending, chores: choresApi, clothesStats: clothesApi.stats });
 
-  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi });
+  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi, packing: packingApi });
   const aiApi = ai.register(router, store, { familySummary: fam.summary, food: foodApi, suggesters });
 
-  const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats(), choreSummary = choresApi.summary()) =>
-    reminders({ food, clothes: clothesStats, shopping: shoppingApi.count(), chores: choreSummary });
+  const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats(), choreSummary = choresApi.summary(), calendarSummary = calendarApi.summary()) =>
+    reminders({ food, clothes: clothesStats, shopping: shoppingApi.count(), chores: choreSummary, calendar: calendarSummary, swaps: clothesApi.swaps(), money: moneyApi.summary(), trips: packingApi.upcoming() });
 
   // The combined data panel: one call for a dashboard (or a phone app's home screen).
   router.get('/api/v1/dashboard', () => {
     const food = foodApi.stats();
     const clothesStats = clothesApi.stats();
     const choreSummary = choresApi.summary();
+    const calendarSummary = calendarApi.summary();
     return {
       family: fam.summary(),
       food,
       clothes: clothesStats,
       shoppingCount: shoppingApi.count(),
       chores: choreSummary,
-      reminders: remindersNow(food, clothesStats, choreSummary),
+      calendar: calendarSummary,
+      trips: packingApi.upcoming(),
+      reminders: remindersNow(food, clothesStats, choreSummary, calendarSummary),
       handMeDowns: clothesApi.handMeDowns(),
       ai: { ready: aiApi.publicSettings().ready, onDevice: aiApi.publicSettings().onDevice },
     };
@@ -74,7 +87,7 @@ function createApp(store) {
 
   // Backup and restore everything except the AI key. In the demo, the backup is still the
   // household's own data, and restoring waits until the demo is over.
-  const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores'];
+  const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores', 'calendar', 'packing', 'money'];
   router.get('/api/v1/export', () => {
     const data = {};
     const source = demoApi.inDemo() ? store.data.demoSaved || {} : store.data;
@@ -93,7 +106,7 @@ function createApp(store) {
       if (data[k] !== undefined && (typeof data[k] !== 'object' || Array.isArray(data[k]))) throw new HttpError(400, `Backup section ${k} is damaged`);
     }
     // Lists the app reads straight away must be lists, or the pages would break after restoring.
-    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'] };
+    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'], calendar: ['events'], packing: ['trips'] };
     for (const [k, keys] of Object.entries(LISTS)) {
       for (const key of keys) {
         const v = data[k] && data[k][key];

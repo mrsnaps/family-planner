@@ -10,6 +10,7 @@ const { HttpError, text } = require('../../lib/http');
 const DEFAULT = { items: [] };
 const SNOOZE_DAYS = 14; // "Not now" hides a suggestion for this long
 const KINDS = ['food', 'clothes', 'other'];
+const SPEND_CATEGORIES = ['food', 'clothes', 'household', 'activities', 'other'];
 
 function suggest({ meals, clothesStats, existing, habits = [], dismissed = {}, now = new Date() }) {
   const have = new Set(existing.filter((i) => !i.done).map((i) => keyOf(i)));
@@ -269,14 +270,15 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
   const spending = () => (data().spending ||= []);
   const spendingView = () => ({
     entries: [...spending()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 30),
-    ...spendingSummary(spending(), foodHistory().cooked || []),
+    ...spendingSummary(spending().filter((e) => !e.category || e.category === 'food'), foodHistory().cooked || []),
   });
   router.get('/api/v1/spending', () => spendingView());
   router.post('/api/v1/spending', (req, body) => {
     const amount = Number(String((body && body.amount) ?? '').replace(/[£,\s]/g, ''));
     if (!Number.isFinite(amount) || amount <= 0 || amount > 5000) throw new HttpError(400, 'Enter how much it came to, like 64.20');
     const date = body.date && !isNaN(new Date(body.date)) ? new Date(body.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-    const entry = { id: newId(), amount: Math.round(amount * 100) / 100, date, shop: String(body.shop || '').trim().slice(0, 40) || null, ...(who(req) ? { addedBy: who(req) } : {}) };
+    const category = SPEND_CATEGORIES.includes(body.category) ? body.category : 'food';
+    const entry = { id: newId(), amount: Math.round(amount * 100) / 100, date, shop: String(body.shop || '').trim().slice(0, 40) || null, ...(category !== 'food' ? { category } : {}), ...(who(req) ? { addedBy: who(req) } : {}) };
     spending().push(entry);
     store.save();
     return { entry, ...spendingView() };
@@ -297,7 +299,7 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
     return { ok: true };
   });
 
-  return { count: () => data().items.filter((i) => !i.done).length, items: () => data().items, dismissed, ruleSuggestions, keyOf };
+  return { spending, count: () => data().items.filter((i) => !i.done).length, items: () => data().items, dismissed, ruleSuggestions, keyOf };
 }
 
 module.exports = { register, suggest, spendingSummary };

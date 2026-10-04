@@ -3,6 +3,7 @@ const { newId } = require('../../lib/store');
 const { HttpError, text } = require('../../lib/http');
 const { TYPES, DEFAULT_TARGETS, DEFAULT_PRICES, outfitsFor, outfitOfTheDay, childStats, handMeDowns } = require('./engine');
 const { normalise, BANDS } = require('./sizes');
+const { swapPlan } = require('./swap');
 
 const DEFAULT = { items: [], targets: DEFAULT_TARGETS, prices: DEFAULT_PRICES };
 
@@ -14,6 +15,7 @@ function cleanItem(input, existing = {}, children) {
   if (input.wornOut !== undefined) it.wornOut = Boolean(input.wornOut);
   if (input.inWash !== undefined) it.inWash = Boolean(input.inWash);
   if (input.uniform !== undefined) it.uniform = Boolean(input.uniform);
+  if (input.stored !== undefined) it.stored = Boolean(input.stored);
   if (!it.name) throw new HttpError(400, 'Item needs a name');
   if (!TYPES.includes(it.type)) throw new HttpError(400, `type must be one of ${TYPES.join(', ')}`);
   if (!children.some((c) => c.id === it.childId)) throw new HttpError(400, 'Unknown childId');
@@ -25,6 +27,7 @@ function cleanItem(input, existing = {}, children) {
   it.wornOut = Boolean(it.wornOut);
   it.inWash = Boolean(it.inWash);
   it.uniform = Boolean(it.uniform);
+  if (!it.stored) delete it.stored;
   return it;
 }
 
@@ -178,7 +181,24 @@ function register(router, store, family) {
   };
   router.get('/api/v1/clothes/stats', () => stats());
 
-  return { stats, addItem, items: () => data().items, handMeDowns: () => handMeDowns(family().children, data().items) };
+  // Seasonal swap: what to pack away and get out for each child, and doing it in one tap.
+  const today = () => new Date().toISOString().slice(0, 10);
+  const swaps = () => family().children.map((c) => swapPlan(c, data().items, today()));
+  router.get('/api/v1/clothes/swap', () => swaps());
+  router.post('/api/v1/clothes/swap/:childId', (req, body, { childId }) => {
+    const child = childOr404(childId);
+    const plan = swapPlan(child, data().items, today());
+    const ids = new Set([...(body.packAway === false ? [] : plan.packAway.map((i) => i.id))]);
+    const out = new Set(body.getOut === false ? [] : [...plan.getOut, ...plan.outgrown].map((i) => i.id));
+    for (const it of data().items) {
+      if (ids.has(it.id)) it.stored = true;
+      if (out.has(it.id)) delete it.stored;
+    }
+    store.save();
+    return swapPlan(child, data().items, today());
+  });
+
+  return { stats, swaps, addItem, items: () => data().items, handMeDowns: () => handMeDowns(family().children, data().items) };
 }
 
 module.exports = { register };

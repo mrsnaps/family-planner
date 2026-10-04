@@ -70,7 +70,7 @@ function bestAddOn(base, candidates, season) {
 function outfitsFor(child, items, { season = 'any', limit = 50, uniform = 'exclude', tempC = null, rain = false } = {}) {
   const cold = tempC !== null && tempC < 12;
   const hot = tempC !== null && tempC >= 20;
-  const mine = items.filter((it) => it.childId === child.id && fitsChild(it, child) && !it.inWash &&
+  const mine = items.filter((it) => it.childId === child.id && fitsChild(it, child) && !it.inWash && !it.stored &&
     (uniform === 'any' || (uniform === 'only' ? it.uniform || ['shoes', 'outerwear'].includes(it.type) : !it.uniform)) &&
     !(cold && it.season === 'summer') && !(hot && it.season === 'winter'));
   const by = (t) => mine.filter((it) => it.type === t);
@@ -131,7 +131,7 @@ function childStats(child, items, targets = DEFAULT_TARGETS, now = new Date(), {
 
   // Everyday clothes only; school uniform is counted separately below.
   const fitting = count((it) => fitsChild(it, child) && !it.uniform);
-  const clean = count((it) => fitsChild(it, child) && !it.uniform && !it.inWash);
+  const clean = count((it) => fitsChild(it, child) && !it.uniform && !it.inWash && !it.stored);
   const outgrown = mine.filter(
     (it) => it.type !== 'shoes' && !it.wornOut && compareSize(it.size, child.clothingSize) < 0
   ).length;

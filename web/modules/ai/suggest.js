@@ -64,6 +64,22 @@ const SCHEMAS = {
     required: ['assignments', 'suggestions'],
     additionalProperties: false,
   },
+  'suggest-packing': {
+    type: 'object',
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { group: str, name: str, qty: { type: 'integer' }, detail: str },
+          required: ['group', 'name', 'qty', 'detail'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['items'],
+    additionalProperties: false,
+  },
   'suggest-outfits': {
     type: 'object',
     properties: {
@@ -105,6 +121,14 @@ const SYSTEM = {
     'Give up to 3 different outfits, best first, each with one short reason.',
 };
 
+SYSTEM['suggest-packing'] =
+  'You write a packing list for a UK family\'s trip. Group items by person (use each child\'s name, each grown-up\'s name, ' +
+  'or "Everyone" for shared things). Scale clothes to the nights away (assume washing for trips over a week), suit the weather ' +
+  'and the destination, and add what children of each age need (nappies and wipes for babies, a comforter for little ones, ' +
+  'something to do on the journey). For children, name real clothes from their wardrobe in "detail" when it helps; otherwise ' +
+  'leave detail empty. Use the rule-based list as a starting point: keep what is right, fix quantities, add what it missed. ' +
+  'qty is how many (1 when it doesn\'t matter). At most 80 items.';
+
 const DAY = 86400000;
 const line = (p) => `- ${p.name}${p.quantity != null ? `: ${p.quantity} ${p.unit || ''}`.trimEnd() : ''}${p.expiry ? ` (use by ${p.expiry})` : ''}`;
 const familyLine = (f) => {
@@ -136,7 +160,7 @@ function habitsText(history, recipesById, now) {
   return { bought: b.join('\n') || '- (nothing recorded yet)', cooked: c.join('\n') || '- (nothing recorded yet)' };
 }
 
-function createSuggesters({ familySummary, food, clothes, shopping, chores }) {
+function createSuggesters({ familySummary, food, clothes, shopping, chores, packing = null }) {
   const today = () => new Date().toISOString().slice(0, 10);
 
   const shoppingArea = {
@@ -306,7 +330,54 @@ function createSuggesters({ familySummary, food, clothes, shopping, chores }) {
     },
   };
 
-  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}) };
+  // Packing: the AI writes the whole list for a trip; the app keeps what's already ticked.
+  const packingArea = packing && {
+    task: 'suggest-packing',
+    needs: ['tripId'],
+    prompt({ tripId }) {
+      let trip;
+      try {
+        trip = packing.trip(tripId);
+      } catch {
+        throw Object.assign(new Error('No such trip'), { status: 404 });
+      }
+      const f = familySummary();
+      const rules = packing.rules(trip);
+      const going = f.children.filter((c) => !trip.who.length || trip.who.includes(c.id));
+      const w = rules.weather;
+      const wardrobe = going.map((c) => {
+        const mine = clothes.items().filter((i) => i.childId === c.id && !i.wornOut && !i.inWash && !i.stored);
+        return `- ${c.name}, age ${c.age != null ? Math.floor(c.age) : '?'}, size ${c.clothingSize || '?'}: ${mine.slice(0, 40).map((i) => `${i.name} (${i.type}${i.season && i.season !== 'all' ? `, ${i.season}` : ''})`).join('; ') || 'no clothes listed'}`;
+      });
+      const adults = (chores ? chores.people().filter((p) => p.adult).map((p) => p.name) : []).slice(0, f.adults);
+      return [
+        `Today is ${today()}.`, familyLine(f),
+        `Trip: ${trip.name}${trip.destination ? ` to ${trip.destination}` : ''}, ${trip.start} to ${trip.end} (${rules.nights} night${rules.nights === 1 ? '' : 's'})${trip.abroad ? ', abroad' : ''}.`,
+        `Weather: ${w.feel}${w.tempC != null ? `, about ${w.tempC}°C` : ''}${w.rain ? ', rain likely' : ''}${w.guessed ? ' (a guess from the time of year)' : ''}.`,
+        `Going: ${[...(adults.length ? adults : [`${f.adults} grown-up${f.adults === 1 ? '' : 's'}`]), ...going.map((c) => c.name)].join(', ')}.`,
+        `Children's wardrobes:\n${wardrobe.join('\n') || '- (no children going)'}`,
+        `Rule-based list (group: item x qty):\n${rules.items.map((i) => `- ${i.group}: ${i.name} x${i.qty}`).join('\n')}`,
+        'Write the packing list.',
+      ].join('\n\n');
+    },
+    normalize(r) {
+      const items = [];
+      const seen = new Set();
+      for (const i of Array.isArray(r.items) ? r.items : []) {
+        const name = String(i.name || '').trim().slice(0, 80);
+        const group = String(i.group || '').trim().slice(0, 40) || 'Everyone';
+        const k = `${group}|${name}`.toLowerCase();
+        if (!name || seen.has(k)) continue;
+        seen.add(k);
+        const qty = Number.isInteger(i.qty) && i.qty > 0 && i.qty < 1000 ? i.qty : 1;
+        const kid = familySummary().children.find((c) => c.name.toLowerCase() === group.toLowerCase());
+        items.push({ group, name, qty, ...(i.detail ? { detail: String(i.detail).slice(0, 200) } : {}), ...(kid ? { childId: kid.id } : {}) });
+      }
+      return { items: items.slice(0, 80) };
+    },
+  };
+
+  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}), ...(packingArea ? { packing: packingArea } : {}) };
 }
 
 module.exports = { createSuggesters, SCHEMAS, SYSTEM };

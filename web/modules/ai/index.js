@@ -250,7 +250,7 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
   // tempC and rain when the weather is known). Cached until the household's data changes,
   // or for a day. "result" is an answer the phone's on-device AI already worked out.
   const suggestParams = (b, area) => {
-    const p = { childId: b.childId || null, tempC: b.tempC === undefined || b.tempC === null || b.tempC === '' ? null : Number(b.tempC), rain: b.rain === true || b.rain === '1' || b.rain === 'true' };
+    const p = { childId: b.childId || null, tripId: b.tripId ? String(b.tripId) : null, tempC: b.tempC === undefined || b.tempC === null || b.tempC === '' ? null : Number(b.tempC), rain: b.rain === true || b.rain === '1' || b.rain === 'true' };
     for (const k of area.needs || []) if (!p[k]) throw new HttpError(400, `${k} is needed`);
     if (p.tempC !== null && !Number.isFinite(p.tempC)) p.tempC = null;
     return p;
@@ -268,7 +268,7 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
     }
     const s = settings();
     const cache = (s.suggestCache ||= {});
-    const slot = name + (params.childId ? ':' + params.childId : '');
+    const slot = name + (params.childId ? ':' + params.childId : '') + (params.tripId ? ':' + params.tripId : '');
     const hash = fingerprint(prompt);
     const hit = cache[slot];
     let entry;

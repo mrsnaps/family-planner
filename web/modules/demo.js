@@ -6,7 +6,7 @@
 const { Store } = require('../lib/store');
 const { HttpError } = require('../lib/http');
 
-const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores'];
+const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores', 'calendar', 'packing', 'money'];
 const DAY = 86400000;
 const ALEX = 'alex@parker.example';
 const SAM = 'sam@parker.example';
@@ -77,7 +77,8 @@ async function buildSample(createApp, now = new Date()) {
       ...clothes(mia, [
         ['Navy school jumper', 'top', 'navy', '9-10Y', { uniform: true }], ['White polo shirt', 'top', 'white', '9-10Y', { uniform: true }],
         ['Grey school skirt', 'bottom', 'grey', '9-10Y', { uniform: true }], ['Rainbow T-shirt', 'top', 'white', '9-10Y', { pattern: 'patterned', season: 'summer' }],
-        ['Denim jeans', 'bottom', 'blue', '9-10Y'], ['Purple hoodie', 'top', 'purple', '9-10Y', { inWash: true }],
+        ['Denim jeans', 'bottom', 'blue', '9-10Y'], ['Denim shorts', 'bottom', 'blue', '9-10Y', { season: 'summer' }],
+        ['Sundress', 'dress', 'yellow', '9-10Y', { season: 'summer' }], ['Purple hoodie', 'top', 'purple', '9-10Y', { inWash: true }],
         ['Yellow raincoat', 'outerwear', 'yellow', '9-10Y'], ['Unicorn pyjamas', 'pyjamas', 'pink', '8-9Y', { pattern: 'patterned' }],
         ['Trainers', 'shoes', 'white', '2'], ['Striped top', 'top', 'red', '7-8Y', { pattern: 'patterned' }],
         ['Green cord trousers', 'bottom', 'green', '7-8Y'], ['Blue fleece', 'top', 'blue', '7-8Y'],
@@ -119,6 +120,28 @@ async function buildSample(createApp, now = new Date()) {
   // Food spending over the last six weeks.
   for (const [amount, ago, shop, by] of [[86.4, 2, 'Tesco', SAM], [23.15, 6, 'Co-op', ALEX], [91.8, 9, 'Tesco', ALEX], [14.6, 13, 'Lidl', SAM], [78.25, 16, 'Sainsbury\'s', SAM], [88.9, 23, 'Tesco', ALEX], [19.4, 27, 'Co-op', SAM], [83.1, 30, 'Tesco', ALEX], [76.5, 37, 'Sainsbury\'s', SAM]]) {
     await call('POST', '/api/v1/spending', { amount, date: day(-ago), shop }, by);
+  }
+
+  // Other spending this month, and a monthly budget.
+  for (const [amount, ago, shop, category, by] of [[42, 4, 'Next', 'clothes', SAM], [24, 8, 'Swim school', 'activities', ALEX], [11.5, 3, 'Wilko', 'household', ALEX]]) {
+    await call('POST', '/api/v1/spending', { amount, date: day(-ago), shop, category }, by);
+  }
+  await call('PUT', '/api/v1/money/budget', { budget: 750 });
+
+  // The calendar: school kit days (one tomorrow, so there's something to pack), clubs, a one-off.
+  const weekday = (n) => new Date(now.getTime() + n * DAY).getUTCDay();
+  await call('POST', '/api/v1/calendar/events', { starter: 'pe', days: [2, 4], who: [mia.id] });
+  await call('POST', '/api/v1/calendar/events', { starter: 'swimming', days: [weekday(1)], who: [leo.id] });
+  await call('POST', '/api/v1/calendar/events', { starter: 'library', days: [1], who: [leo.id] });
+  await call('POST', '/api/v1/calendar/events', { starter: 'football', days: [6], time: '10:00', who: [mia.id] });
+  await call('POST', '/api/v1/calendar/events', { title: 'Toddler group', emoji: '🧸', repeat: 'weekly', days: [3], time: '09:30', who: [ruby.id] });
+  await call('POST', '/api/v1/calendar/events', { title: "Parents' evening", emoji: '🏫', date: day(9), time: '17:45' });
+  await call('POST', '/api/v1/calendar/events', { title: 'Gran and Grandad visit', emoji: '👵', date: day(3) });
+
+  // A trip coming up, half packed.
+  const trip = await call('POST', '/api/v1/packing/trips', { name: "Half term at Gran's", destination: 'Cardiff', start: day(12), end: day(15), weather: { feel: 'mild', rain: true } });
+  for (const it of trip.items.filter((x, i) => i % 3 === 0)) {
+    await call('PUT', `/api/v1/packing/trips/${trip.id}/items/${it.id}`, { packed: true });
   }
 
   // History, moved back in time: the weekly shops, meals cooked, and chores done.

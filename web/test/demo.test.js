@@ -38,6 +38,13 @@ test('the demo shows a lived-in family, then puts the real one back exactly', as
   assert.ok(chores.totals.some((p) => p.points > 0 && p.money > 0), 'children have earned pocket money');
   assert.ok((await call('GET', '/food/meals')).body.meals.some((m) => m.status === 'ready'), 'something can be cooked tonight');
   assert.ok((await call('GET', '/clothes/items')).body.length > 20);
+  const cal = (await call('GET', '/calendar')).body;
+  assert.ok(cal.events.length >= 5 && cal.upcoming.some((o) => o.kind === 'birthday' || o.kit.length), 'school days, clubs and plans');
+  assert.ok(cal.kitTomorrow.length >= 1, 'something to pack for tomorrow');
+  const trips = (await call('GET', '/packing')).body.trips;
+  assert.ok(trips.length === 1 && trips[0].packedCount > 0, 'a trip, part packed');
+  const month = (await call('GET', '/money')).body;
+  assert.ok(month.budget && month.categories.filter((c) => c.total).length >= 2, 'spending by category with a budget');
 
   // Backups during the demo are still the family's own, and restoring waits.
   assert.deepStrictEqual((await call('GET', '/export')).body.data, before);
