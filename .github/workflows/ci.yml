@@ -28,3 +28,48 @@ jobs:
           npm run test:e2e
           npm run test:web
           npm run test:account
+
+  # After the tests pass on main, publish the home screen version to Amplify.
+  # GitHub signs in to AWS as the role in infra/deploy.yaml; no keys are stored here.
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    concurrency: amplify-deploy
+    env:
+      APP_ID: d3ofenwxb2m5fu
+      AWS_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: phone/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111962953311:role/family-planner-github-deploy
+          aws-region: eu-west-2
+      - name: Build the home screen version
+        working-directory: phone
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: |
+          npm ci
+          npm run zip:web
+      - name: Publish to Amplify
+        working-directory: phone
+        run: |
+          read -r JOB URL < <(aws amplify create-deployment --app-id "$APP_ID" --branch-name main --query '[jobId,zipUploadUrl]' --output text)
+          curl -sSf -X PUT -T family-planner-home-screen.zip "$URL"
+          aws amplify start-deployment --app-id "$APP_ID" --branch-name main --job-id "$JOB" > /dev/null
+          for i in $(seq 1 60); do
+            STATUS=$(aws amplify get-job --app-id "$APP_ID" --branch-name main --job-id "$JOB" --query 'job.summary.status' --output text)
+            echo "Deployment $JOB: $STATUS"
+            case "$STATUS" in SUCCEED) exit 0 ;; FAILED|CANCELLED) exit 1 ;; esac
+            sleep 5
+          done
+          exit 1

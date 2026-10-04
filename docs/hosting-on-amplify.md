@@ -1,6 +1,6 @@
 # Hosting Family Planner on AWS Amplify
 
-**Live now:** https://main.d3ofenwxb2m5fu.amplifyapp.com (Amplify app `family-planner`, London region, set up 2026-10-04 as a manual deploy of `phone/dist-web`). To publish a new version, run `npm run zip:web` in `phone/` and upload the zip to the `main` branch in Amplify, or ask Claude to do it. The steps below switch it to building from GitHub automatically instead; that needs a new Amplify app, because a manual-deploy app can't be linked to Git afterwards.
+**Live now:** https://main.d3ofenwxb2m5fu.amplifyapp.com (Amplify app `family-planner`, London region). **Updates are automatic:** every push to `main` runs the tests, and when they pass the `deploy` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) builds `phone/dist-web` and publishes it. GitHub signs in to AWS with the role in [`infra/deploy.yaml`](../infra/deploy.yaml) (stack `family-planner-deploy`), so no AWS keys are stored in GitHub. The steps below are the alternative of linking a new Amplify app to the repo in the console.
 
 Amplify builds the home screen version straight from this GitHub repository and publishes it. Every change pushed to `main` goes live by itself. Everything runs in the browser and each device keeps its own data, so Amplify only serves files. You can do all of this from an iPad.
 

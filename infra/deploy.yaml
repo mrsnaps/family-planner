@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lets GitHub Actions on mrsnaps/family-planner's main branch publish the app to Amplify. No keys are stored; GitHub proves who it is with OpenID Connect.
+
+Parameters:
+  Repo:
+    Type: String
+    Default: mrsnaps/family-planner
+  AmplifyAppId:
+    Type: String
+    Default: d3ofenwxb2m5fu
+
+Resources:
+  GitHubOidc:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: family-planner-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref GitHubOidc }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${Repo}:ref:refs/heads/main
+      Policies:
+        - PolicyName: publish-to-amplify
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [amplify:CreateDeployment, amplify:StartDeployment, amplify:GetJob]
+                Resource:
+                  - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}/branches/main
+                  - !Sub arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/${AmplifyAppId}/branches/main/*
+
+Outputs:
+  RoleArn: { Value: !GetAtt DeployRole.Arn }
