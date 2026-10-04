@@ -280,8 +280,9 @@ try {
     for (const n of ['Red top', 'Blue top']) await api('/clothes/items', 'POST', { childId: amy.id, name: n, type: 'top', size: '6-7Y', colour: 'red' });
     await page.click('[data-nav="clothes"]:visible');
     await page.click('[data-nav="home"]:visible');
+    await page.waitForSelector('#week-strip');
+    await page.waitForSelector('#page :text("Counting 2 hand-me-downs from Amy")');
     await page.waitForSelector('[data-pass-all]');
-    assert.match(await page.textContent('#page'), /Counting 2 hand-me-downs from Amy/);
     await page.click('[data-pass-all]');
     await page.waitForSelector('#toast.show:has-text("Passed on 2 things")');
     assert.equal((await api(`/clothes/items?childId=${ben.id}`)).data.length, 2);
