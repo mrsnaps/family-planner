@@ -1909,6 +1909,155 @@ if (ACCOUNT) {
   });
 }
 
+// ---------- notifications and Siri (with an online account) ----------
+// Notifications: the home screen version gets reminders by Web Push, sent by the account's
+// server (the iPhone app makes its own). iPhones only allow it once the app is on the Home Screen.
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const localFlag = (key, value) => {
+  try {
+    if (value === undefined) return localStorage.getItem(key) === 'on';
+    if (value) localStorage.setItem(key, 'on');
+    else localStorage.removeItem(key);
+  } catch {}
+  return false;
+};
+const redrawCard = (id, html) => {
+  const card = $(id);
+  if (card) card.outerHTML = html;
+};
+
+function pushCard() {
+  if (!ACCOUNT?.pushSubscribe || IS_APP || state.demo?.on) return '';
+  const can = 'Notification' in window && 'PushManager' in window && 'serviceWorker' in navigator;
+  const on = can && localFlag('fp-push') && Notification.permission === 'granted';
+  let body;
+  if (!ACCOUNT.status().signedIn) body = '<p class="hint">Sign in to get reminders on this phone.</p>';
+  else if (IS_IOS && !navigator.standalone) body = '<p class="hint">Add the app to your Home Screen first (Share &gt; Add to Home Screen), then open it from there and turn notifications on here.</p>';
+  else if (!can) body = "<p class=\"hint\">This browser can't show notifications from the app.</p>";
+  else if (Notification.permission === 'denied') {
+    body = `<p class="hint">Notifications are blocked for this app. To allow them on an iPhone, open the Settings app, tap <strong>Notifications</strong>, then <strong>Family</strong>, and turn on <strong>Allow Notifications</strong>. Then come back here.</p>`;
+  } else if (on) {
+    body = `<p style="margin-top:4px">Notifications are on for this phone.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn" data-push="test">Send a test</button>
+          <button class="btn ghost" data-push="off">Turn off</button>
+        </div>`;
+  } else {
+    body = '<div style="margin-top:12px"><button class="btn primary" data-push="on">Turn on notifications</button></div>';
+  }
+  return `<div class="card" id="push-card">
+        <div class="card-head"><h2>🔔 Notifications</h2>${on ? '<span class="pill">On</span>' : ''}</div>
+        <p class="hint">Reminders arrive at 5pm the day before: food about to go off, school uniform to buy, a child short of clothes and more.</p>
+        ${body}
+      </div>`;
+}
+
+// The server's key as bytes, for pushManager.subscribe.
+const keyBytes = (b64) => Uint8Array.from(atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0));
+
+async function pushAction(what) {
+  if (what === 'on') {
+    // iPhones only ask when this comes straight from the tap, so it goes first.
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') {
+      redrawCard('#push-card', pushCard());
+      return toast(perm === 'denied' ? 'Notifications are blocked. See Settings for how to allow them.' : 'Notifications are still off');
+    }
+    const key = await ACCOUNT.pushKey();
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }));
+    await ACCOUNT.pushSubscribe(sub.toJSON());
+    localFlag('fp-push', true);
+    window.dispatchEvent(new Event('familyplanner:push')); // main.js uploads the reminders
+    await ACCOUNT.pushTest().catch(() => {});
+    redrawCard('#push-card', pushCard());
+    return toast("Notifications are on. We've sent a test one to this phone.");
+  }
+  if (what === 'test') {
+    await ACCOUNT.pushTest();
+    return toast('Sent. It should arrive in a few seconds.');
+  }
+  if (what === 'off') {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
+    if (sub) {
+      await ACCOUNT.pushUnsubscribe(sub.endpoint);
+      await sub.unsubscribe().catch(() => {});
+    }
+    localFlag('fp-push', false);
+    window.dispatchEvent(new Event('familyplanner:push'));
+    redrawCard('#push-card', pushCard());
+    return toast('Notifications are off for this phone');
+  }
+}
+
+// "Hey Siri, add to shopping": a Shortcut on the iPhone sends what was said to the account's
+// server with a key made here (infra/lambda/index.js POST /shortcut/add).
+function siriCard() {
+  if (!ACCOUNT?.shortcutKey || state.demo?.on) return '';
+  const signedIn = ACCOUNT.status().signedIn;
+  const on = signedIn && localFlag('fp-siri');
+  return `<div class="card" id="siri-card">
+        <div class="card-head"><h2>🎙️ Siri</h2>${on ? '<span class="pill">Set up</span>' : ''}</div>
+        ${signedIn ? `<p class="hint">Say "Hey Siri, add to shopping", then what you need, like "milk and eggs". It goes straight on the household's shopping list. You make a Shortcut on your iPhone once to set it up.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn ${on ? '' : 'primary'}" data-siri="setup">${on ? 'Set it up again' : 'Set up Hey Siri'}</button>
+          ${on ? '<button class="btn ghost" data-siri="off">Turn off Siri key</button>' : ''}
+        </div>` : '<p class="hint">Sign in (in Account above) to add things to the shopping list with Siri.</p>'}
+      </div>`;
+}
+
+const copyField = (id, label, value) => `<label class="field" style="margin-top:12px">${label}
+        <span style="display:flex;gap:8px"><input id="${id}" readonly value="${esc(value)}" ${NOFILL}><button type="button" class="btn sm" data-copy="#${id}">Copy</button></span></label>`;
+
+async function siriAction(what) {
+  if (what === 'off') {
+    if (!await ask({ title: 'Turn off the Siri key?', body: '<p class="muted">The "Add to shopping" shortcut stops working. You can set it up again at any time.</p>', ok: 'Turn off', danger: true })) return;
+    await ACCOUNT.shortcutRevoke();
+    localFlag('fp-siri', false);
+    redrawCard('#siri-card', siriCard());
+    return toast('Siri key turned off');
+  }
+  if (localFlag('fp-siri') && !await ask({ title: 'Make a new Siri key?', body: '<p class="muted">The old key stops working, so put the new one in your shortcut.</p>', ok: 'Make a new key' })) return;
+  const key = await ACCOUNT.shortcutKey();
+  localFlag('fp-siri', true);
+  redrawCard('#siri-card', siriCard());
+  await ask({
+    title: 'Set up Hey Siri',
+    body: `<p class="muted">On your iPhone, open the <strong>Shortcuts</strong> app and make this shortcut. You only do it once.</p>
+      <ol class="small" style="margin:10px 0 0 20px;line-height:1.6">
+        <li>Tap <strong>+</strong> to make a new shortcut.</li>
+        <li>Add the action <strong>Dictate Text</strong>.</li>
+        <li>Add <strong>Get Contents of URL</strong> and paste the address below as its URL. Tap the arrow to see more, set <strong>Method</strong> to <strong>POST</strong> and <strong>Request Body</strong> to <strong>JSON</strong>.</li>
+        <li>Add two Text fields to the body: <strong>key</strong>, with the key below pasted in, and <strong>item</strong>, set to <strong>Dictated Text</strong> (pick it from the suggestions above the keyboard).</li>
+        <li>Add <strong>Get Dictionary Value</strong>, and set it to get the value for <strong>message</strong> in <strong>Contents of URL</strong>.</li>
+        <li>Add <strong>Speak Text</strong>, so Siri tells you what was added.</li>
+        <li>Name the shortcut <strong>Add to shopping</strong>. Now say "Hey Siri, add to shopping".</li>
+      </ol>
+      ${copyField('siri-url', 'Address', `${ACCOUNT.apiUrl}/shortcut/add`)}
+      ${copyField('siri-key', 'Key', key)}
+      <p class="hint" style="margin-top:10px">Keep the key private: anyone who has it can add things to your shopping list. It's only shown now. If it gets out, make a new one here or turn it off.</p>`,
+    ok: 'Done',
+  });
+}
+
+document.addEventListener('click', guard(async (e) => {
+  const copy = e.target.closest('[data-copy]');
+  if (copy) {
+    const input = $(copy.dataset.copy);
+    try {
+      await navigator.clipboard.writeText(input.value);
+      copy.textContent = 'Copied';
+    } catch {
+      input.select(); // the person can copy it themselves
+    }
+    return;
+  }
+  const t = e.target.closest('[data-push],[data-siri]');
+  if (!t || !ACCOUNT) return;
+  return t.dataset.push ? pushAction(t.dataset.push) : siriAction(t.dataset.siri);
+}));
+
 async function renderSettings() {
   const [ai, providers, prices] = await Promise.all([api('/ai/settings'), api('/ai/providers'), api('/clothes/prices')]);
   state.ai = ai;
@@ -1999,6 +2148,7 @@ async function renderSettings() {
       ${kitchenCard()}
       ${demoCard()}
       ${feedbackCard()}
+      ${pushCard()}${siriCard()}
       <div class="card">
         <div class="card-head"><h2>💾 Backup</h2></div>
         <p class="hint">Download everything as a file, or restore from one. Restoring replaces what's here now.</p>

@@ -1,7 +1,7 @@
 // Unit checks for the phone layer's pure parts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { plan } from '../mobile/notifications.js';
+import { plan, pushItems } from '../mobile/notifications.js';
 import { extractJson } from '../mobile/json.js';
 import { localFetcher } from '../mobile/local-api.js';
 
@@ -18,6 +18,15 @@ test('reminders become notifications at 5pm the day before', () => {
   assert.equal(list[1].schedule.at.getTime(), new Date('2026-10-04T17:00:00').getTime());
   assert.notEqual(list[0].id, list[1].id);
   assert.equal(plan([{ id: 'food-low-1', level: 'warn', title: 'x' }], now)[0].id, list[1].id); // stable ids
+});
+
+test('the home screen version uploads the same reminders with their own ids and ISO times', () => {
+  const now = new Date('2026-10-04T09:00:00');
+  const items = pushItems([
+    { id: 'food-expiry-a-2026-10-06', kind: 'food', level: 'warn', date: '2026-10-06', title: 'Milk goes off in 2 days', detail: 'Use it up' },
+    { id: 'shopping-3', kind: 'shopping', level: 'info', date: null, title: '3 things on the list' },
+  ], now);
+  assert.deepEqual(items, [{ id: 'food-expiry-a-2026-10-06', at: new Date('2026-10-05T17:00:00').toISOString(), title: 'Family Planner', body: 'Milk goes off in 2 days. Use it up' }]);
 });
 
 test('extractJson copes with fences and chatter', () => {

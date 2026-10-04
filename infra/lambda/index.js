@@ -6,6 +6,10 @@
 //   POST /join { code }  join another household       POST /leave
 //   POST /delete-account  removes the login and everything only this person can see
 //   POST /feedback { text, page }  emails the app's owner (FEEDBACK_TOPIC), up to 10 a day each
+//   GET  /push/key, POST /push/subscribe|unsubscribe|schedule|test  reminders on a home screen
+//        app (Web Push), sent by the same function every 15 minutes (EventBridge)
+//   POST /shortcut/key, /shortcut/key/revoke  a key for the "Hey Siri" Shortcut, which calls
+//   POST /shortcut/add { key, item }  without signing in (its own route in cloud.yaml)
 // Each person signs in with their own email. Someone who hasn't joined a household has
 // their own, under their user id, so accounts made before households existed keep working.
 const { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectVersionsCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
@@ -36,12 +40,31 @@ async function getJson(Key) {
   }
 }
 const putJson = (Key, value, extra = {}) => s3.send(new PutObjectCommand({ Bucket, Key, Body: JSON.stringify(value), ContentType: 'application/json', ...extra }));
+// Read, change and save a file, trying again if something else saved it in between.
+// change() returns the new value, or undefined to leave the file as it is.
+async function update(Key, change) {
+  for (let tries = 0; ; tries++) {
+    const r = await getJson(Key);
+    const next = await change(r.value);
+    if (next === undefined) return r.value;
+    try {
+      await putJson(Key, next, r.rev ? { IfMatch: r.rev } : { IfNoneMatch: '*' });
+      return next;
+    } catch (e) {
+      const status = e.$metadata && e.$metadata.httpStatusCode;
+      if ((status !== 412 && status !== 409) || tries >= 2) throw e;
+    }
+  }
+}
 
 const memberKey = (sub) => `members/${sub}.json`;
 const dataKey = (hid) => `households/${hid}.json`;
 const peopleKey = (hid) => `households/${hid}.members.json`;
 const inviteKey = (code) => `invites/${code}.json`;
 const feedbackKey = (sub) => `members/${sub}.feedback.json`;
+const pushKey = (sub) => `members/${sub}.push.json`;
+const shortcutKey = (sub) => `members/${sub}.shortcut.json`;
+const lookupKey = (hash) => `shortcuts/${hash}.json`;
 
 async function householdOf(sub) {
   const m = await getJson(memberKey(sub));
@@ -213,6 +236,10 @@ routes['POST /delete-account'] = async (me) => {
   for (const h of new Set([hid, me.sub])) await forgetHousehold(h, me);
   await purge(memberKey(me.sub));
   await purge(feedbackKey(me.sub));
+  await purge(pushKey(me.sub));
+  const siri = (await getJson(shortcutKey(me.sub))).value;
+  if (siri) await purge(lookupKey(siri.hash));
+  await purge(shortcutKey(me.sub));
   // Invite codes this person made (they'd stop working anyway, but they hold their email).
   const inv = await s3.send(new ListObjectsV2Command({ Bucket, Prefix: 'invites/' }));
   for (const o of inv.Contents || []) {
@@ -223,18 +250,277 @@ routes['POST /delete-account'] = async (me) => {
   return { ok: true };
 };
 
+// ---------- Web Push: reminders on a home screen app ----------
+// iPhones (iOS 16.4+) show notifications from web apps added to the home screen. Each phone
+// gives us a subscription (an address at Apple's, Google's, Microsoft's or Mozilla's push
+// service, plus keys); the phone uploads its reminders for the next few days, and every 15
+// minutes this function sends the ones that are due. Only Node's crypto is needed:
+// VAPID (RFC 8292) says who is sending, and RFC 8291 encrypts the message for that phone.
+const PUSH_HOSTS = [/\.push\.apple\.com$/, /^fcm\.googleapis\.com$/, /\.notify\.windows\.com$/, /^updates\.push\.services\.mozilla\.com$/];
+const MAX_SCHEDULE = 40;
+const MAX_SUBS = 10; // phones and browsers per person
+const LATE = 6 * 3600000; // a reminder more than 6 hours late isn't sent
+const KEEP_SENT = 30 * 86400000;
+const b64 = (buf) => Buffer.from(buf).toString('base64url');
+const unb64 = (s) => Buffer.from(String(s || ''), 'base64url');
+const clip = (v, max) => String(v ?? '').trim().slice(0, max);
+
+let vapidKey = null;
+function vapid() {
+  const pub = unb64(process.env.VAPID_PUBLIC);
+  const d = unb64(process.env.VAPID_PRIVATE);
+  if (pub.length !== 65 || d.length !== 32) throw fail(503, "Notifications aren't set up yet.");
+  vapidKey ||= crypto.createPrivateKey({ key: { kty: 'EC', crv: 'P-256', d: b64(d), x: b64(pub.subarray(1, 33)), y: b64(pub.subarray(33)) }, format: 'jwk' });
+  return { key: vapidKey, publicKey: process.env.VAPID_PUBLIC };
+}
+
+// The Authorization header: a short-lived token signed with our private key (ES256).
+function vapidAuth(endpoint) {
+  const { key, publicKey } = vapid();
+  const header = b64(JSON.stringify({ typ: 'JWT', alg: 'ES256' }));
+  const claims = b64(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: process.env.VAPID_SUBJECT || 'https://main.d3ofenwxb2m5fu.amplifyapp.com' }));
+  const sig = crypto.sign('sha256', Buffer.from(`${header}.${claims}`), { key, dsaEncoding: 'ieee-p1363' });
+  return `vapid t=${header}.${claims}.${b64(sig)}, k=${publicKey}`;
+}
+
+// RFC 8291: encrypts the message so only the phone that subscribed can read it (aes128gcm).
+function encrypt(sub, text) {
+  const uaPublic = unb64(sub.keys.p256dh);
+  const auth = unb64(sub.keys.auth);
+  const ecdh = crypto.createECDH('prime256v1');
+  const asPublic = ecdh.generateKeys();
+  const shared = ecdh.computeSecret(uaPublic);
+  const hkdf = (salt, ikm, info, len) => Buffer.from(crypto.hkdfSync('sha256', ikm, salt, info, len));
+  const ikm = hkdf(auth, shared, Buffer.concat([Buffer.from('WebPush: info\0'), uaPublic, asPublic]), 32);
+  const salt = crypto.randomBytes(16);
+  const cek = hkdf(salt, ikm, Buffer.from('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = hkdf(salt, ikm, Buffer.from('Content-Encoding: nonce\0'), 12);
+  const cipher = crypto.createCipheriv('aes-128-gcm', cek, nonce);
+  const body = Buffer.concat([cipher.update(Buffer.concat([Buffer.from(text), Buffer.from([2])])), cipher.final(), cipher.getAuthTag()]);
+  const rs = Buffer.alloc(4);
+  rs.writeUInt32BE(4096);
+  return Buffer.concat([salt, rs, Buffer.from([asPublic.length]), asPublic, body]);
+}
+
+// Sends one notification. Returns the push service's status: 201 is delivered, 404 or 410
+// means the phone has turned notifications off (or the app was removed).
+async function push(sub, message) {
+  const res = await fetch(sub.endpoint, {
+    method: 'POST',
+    headers: { Authorization: vapidAuth(sub.endpoint), TTL: '86400', Urgency: 'normal', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream' },
+    body: encrypt(sub, JSON.stringify(message)),
+  });
+  return res.status;
+}
+const delivered = (status) => status >= 200 && status < 300;
+const gone = (status) => status === 404 || status === 410;
+
+function checkSubscription(s) {
+  let url;
+  try { url = new URL(s.endpoint); } catch { url = null; }
+  if (!url || url.protocol !== 'https:' || String(s.endpoint).length > 1000 || !PUSH_HOSTS.some((re) => re.test(url.hostname))) throw fail(400, "That isn't a push address this app can use.");
+  if (unb64(s.keys && s.keys.p256dh).length !== 65 || unb64(s.keys && s.keys.auth).length !== 16) throw fail(400, 'The notification keys are missing.');
+  return { endpoint: url.href, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth }, addedAt: new Date().toISOString() };
+}
+
+// Reminders already sent are remembered for 30 days, so the same one isn't sent twice.
+function tidy(p) {
+  const old = Date.now() - KEEP_SENT;
+  const sent = {};
+  for (const [id, at] of Object.entries((p && p.sent) || {})) if (new Date(at) > old) sent[id] = at;
+  return { subs: (p && p.subs) || [], schedule: (p && p.schedule) || [], sent };
+}
+const withoutSubs = (p, endpoints) => {
+  const next = tidy(p);
+  next.subs = next.subs.filter((s) => !endpoints.includes(s.endpoint));
+  return next;
+};
+
+routes['GET /push/key'] = async () => ({ publicKey: vapid().publicKey });
+
+routes['POST /push/subscribe'] = async (me, body) => {
+  const sub = checkSubscription((body && body.subscription) || {});
+  await update(pushKey(me.sub), (p) => {
+    const next = withoutSubs(p, [sub.endpoint]);
+    next.subs = [...next.subs, sub].slice(-MAX_SUBS);
+    return next;
+  });
+  return { ok: true };
+};
+
+routes['POST /push/unsubscribe'] = async (me, body) => {
+  const endpoint = String((body && body.endpoint) || '');
+  await update(pushKey(me.sub), (p) => (p ? withoutSubs(p, [endpoint]) : undefined));
+  return { ok: true };
+};
+
+routes['POST /push/schedule'] = async (me, body) => {
+  if (!body || !Array.isArray(body.items)) throw fail(400, 'Send a list of reminders.');
+  const schedule = [];
+  for (const i of body.items.slice(0, MAX_SCHEDULE)) {
+    const at = new Date(i && i.at);
+    const id = clip(i && i.id, 100);
+    if (!id || isNaN(at)) continue;
+    schedule.push({ id, at: at.toISOString(), title: clip(i.title, 100), body: clip(i.body, 300) });
+  }
+  await update(pushKey(me.sub), (p) => ({ ...tidy(p), schedule }));
+  return { ok: true, count: schedule.length };
+};
+
+routes['POST /push/test'] = async (me) => {
+  const p = (await getJson(pushKey(me.sub))).value;
+  if (!p || !p.subs || !p.subs.length) throw fail(400, 'Turn notifications on first.');
+  const results = await Promise.all(p.subs.map((s) => push(s, { title: 'Family Planner', body: 'Notifications are on', tag: 'test' }).catch(() => 0)));
+  const dead = p.subs.filter((s, i) => gone(results[i])).map((s) => s.endpoint);
+  if (dead.length) await update(pushKey(me.sub), (q) => (q ? withoutSubs(q, dead) : undefined));
+  return { ok: true, sent: results.filter(delivered).length };
+};
+
+// Every 15 minutes: send each person's reminders that are due (and no more than 6 hours late).
+async function sendDue(now = Date.now()) {
+  const keys = [];
+  let ContinuationToken;
+  do {
+    const r = await s3.send(new ListObjectsV2Command({ Bucket, Prefix: 'members/', ContinuationToken }));
+    for (const o of r.Contents || []) if (o.Key.endsWith('.push.json')) keys.push(o.Key);
+    ContinuationToken = r.IsTruncated ? r.NextContinuationToken : undefined;
+  } while (ContinuationToken);
+  let sent = 0;
+  for (const Key of keys) {
+    const p = (await getJson(Key)).value;
+    if (!p || !p.subs || !p.subs.length) continue;
+    const due = (p.schedule || []).filter((i) => {
+      const at = new Date(i.at).getTime();
+      return at <= now && at > now - LATE && (p.sent || {})[i.id] !== i.at;
+    });
+    if (!due.length) continue;
+    const dead = [];
+    const done = [];
+    for (const item of due) {
+      const subs = p.subs.filter((s) => !dead.includes(s.endpoint));
+      const results = await Promise.all(subs.map((s) => push(s, { title: 'Family Planner', body: item.body, tag: item.id }).catch(() => 0)));
+      subs.forEach((s, i) => gone(results[i]) && dead.push(s.endpoint));
+      // If a push service was having trouble, it's tried again next time.
+      if (results.every((r) => delivered(r) || gone(r))) done.push(item);
+      sent += results.filter(delivered).length;
+    }
+    await update(Key, (q) => {
+      if (!q) return undefined;
+      const next = withoutSubs(q, dead);
+      for (const item of done) next.sent[item.id] = item.at;
+      return next;
+    });
+  }
+  return { checked: keys.length, sent };
+}
+
+// ---------- "Hey Siri, add milk" ----------
+// A Shortcut on the iPhone sends { key, item } to POST /shortcut/add. The key is made here and
+// shown once in Settings. Only its sha256 is kept, in members/<sub>.shortcut.json, with
+// shortcuts/<sha256>.json saying whose it is.
+const SIRI_PER_DAY = 60;
+const WRONG_KEY = "That Siri key isn't right. Set it up again in Settings.";
+const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+// Matches names the way the shopping list does (web/modules/shopping/habits.js norm).
+const sameName = (s) => String(s || '').toLowerCase().trim().replace(/\s+/g, ' ').replace(/(es|s)$/, '');
+
+async function revokeShortcut(sub) {
+  const old = (await getJson(shortcutKey(sub))).value;
+  if (old) await s3.send(new DeleteObjectCommand({ Bucket, Key: lookupKey(old.hash) }));
+  await s3.send(new DeleteObjectCommand({ Bucket, Key: shortcutKey(sub) }));
+}
+
+// Making a new key turns the old one off.
+routes['POST /shortcut/key'] = async (me) => {
+  await revokeShortcut(me.sub);
+  const key = crypto.randomBytes(32).toString('base64url');
+  const hash = sha256(key);
+  await putJson(lookupKey(hash), { sub: me.sub });
+  await putJson(shortcutKey(me.sub), { hash, createdAt: new Date().toISOString(), email: me.email });
+  return { key };
+};
+
+routes['POST /shortcut/key/revoke'] = async (me) => {
+  await revokeShortcut(me.sub);
+  return { ok: true };
+};
+
+// "milk and eggs" or "Milk, eggs." -> ['milk', 'eggs'], up to 10 things.
+function splitItems(text) {
+  return String(text || '').split(/\s*(?:,|;|\n|&|\band\b)\s*/i)
+    .map((s) => s.replace(/^[\s.!?]+|[\s.!?]+$/g, '').slice(0, 80))
+    .filter(Boolean)
+    .slice(0, 10);
+}
+const listed = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]);
+
+// No sign-in here: the key is the password. The Shortcut reads "message" out loud.
+async function shortcutAdd(body) {
+  const answer = (status, message, extra = {}) => reply(status, { ok: status === 200, message, ...(status === 200 ? {} : { error: message }), ...extra });
+  const key = String((body && body.key) || '');
+  if (!/^[\w-]{43}$/.test(key)) return answer(403, WRONG_KEY);
+  const lookup = await getJson(lookupKey(sha256(key)));
+  if (!lookup.value) return answer(403, WRONG_KEY);
+  const item = String((body && body.item) || '');
+  const names = item.length <= 400 ? splitItems(item) : [];
+  if (!names.length) return answer(400, "I didn't catch what to add. Try again.");
+  const today = new Date().toISOString().slice(0, 10);
+  const count = lookup.value.day === today ? lookup.value.count || 0 : 0;
+  if (count >= SIRI_PER_DAY) return answer(429, "That's a lot for one day. Add the rest in the app.");
+  await putJson(lookupKey(sha256(key)), { ...lookup.value, day: today, count: count + 1 });
+  const { sub } = lookup.value;
+  const owner = (await getJson(shortcutKey(sub))).value || {};
+  let added = [];
+  let already = [];
+  await update(dataKey(await householdOf(sub)), (data) => {
+    added = [];
+    already = [];
+    const next = data || {};
+    next.shopping ||= { items: [] };
+    next.shopping.items ||= [];
+    const have = new Set(next.shopping.items.filter((i) => !i.done).map((i) => sameName(i.name)));
+    for (const name of names) {
+      if (have.has(sameName(name))) {
+        already.push(name);
+        continue;
+      }
+      have.add(sameName(name));
+      // The same shape as food added in the app (web/modules/shopping/index.js newItem).
+      next.shopping.items.push({ id: crypto.randomUUID(), addedAt: new Date().toISOString(), name, kind: 'food', done: false, ...(owner.email ? { addedBy: owner.email } : {}) });
+      added.push(name);
+    }
+    return added.length ? next : undefined;
+  });
+  const message = [
+    added.length && `Added ${listed(added)} to the shopping list`,
+    already.length && `${listed(already)} ${already.length > 1 ? 'were' : 'was'} already on it`,
+  ].filter(Boolean).join('. ');
+  return answer(200, message, { added });
+}
+
 exports.handler = async (event) => {
+  // EventBridge's 15-minute schedule (PushSchedule in infra/cloud.yaml).
+  if (event.source === 'aws.events' || !event.requestContext) return sendDue();
   const origin = event.headers && event.headers.origin;
   cors = ORIGINS.includes(origin) ? { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': 'GET,PUT,POST', 'access-control-max-age': '3600', vary: 'origin' } : {};
   const method = event.requestContext.http.method;
   if (method === 'OPTIONS') return { statusCode: 204, headers: cors };
   const route = routes[`${method} ${event.rawPath}`];
+  const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString() : event.body || '';
+  // The Siri Shortcut's route has no sign-in (see shortcutAdd).
+  if (`${method} ${event.rawPath}` === 'POST /shortcut/add') {
+    if (raw.length > 4000) return reply(413, { error: 'Too long', message: "That's too much to add at once." });
+    let body;
+    try { body = JSON.parse(raw || '{}'); } catch { return reply(400, { error: 'Not JSON', message: "The Shortcut isn't set up right. Set it up again in Settings." }); }
+    return shortcutAdd(body);
+  }
   if (!route) return reply(404, { error: 'Not found' });
-  const claims = event.requestContext.authorizer.jwt.claims;
+  const auth = event.requestContext.authorizer;
+  const claims = auth && auth.jwt && auth.jwt.claims;
+  if (!claims || !claims.sub) return reply(401, { error: 'Sign in first' });
   // An email that hasn't been confirmed isn't shown to the household as who someone is.
   const verified = claims.email_verified === true || claims.email_verified === 'true';
   const me = { sub: claims.sub, email: (verified && claims.email) || null, username: claims['cognito:username'] || claims.sub, ownEmail: claims.email || null };
-  const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString() : event.body || '';
   if (raw.length > MAX) return reply(413, { error: 'Too much data to save' });
   let body = null;
   if (raw) {
