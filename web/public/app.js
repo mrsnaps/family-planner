@@ -441,10 +441,8 @@ const DIET_LABEL = { vegetarian: '🌱 Veggie', 'dairy-free': 'No dairy', 'glute
 function aiIdeasCard() {
   const ai = state.ai;
   if (!ai || !ai.ready) {
-    return `<div class="card" style="margin-bottom:16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-      <span class="emoji">✨</span>
-      <div class="grow" style="flex:1;min-width:200px"><h3>Fresh ideas from AI</h3><p class="small muted">Pick an AI in Settings (Claude, ChatGPT, Gemini or a free one on your computer) for new meal ideas and photo scanning.</p></div>
-      <button class="btn" data-nav="settings">Set up AI</button></div>`;
+    // The app is built to work fully without AI, so this stays a quiet, optional pointer.
+    return `<p class="hint" style="margin-bottom:16px">Optional: add an AI in <button class="btn ghost sm" data-nav="settings">Settings</button> for meal ideas beyond your recipes and for reading photos. Everything else works without one.</p>`;
   }
   const ideas = state.aiIdeas;
   return `<div class="card" style="margin-bottom:16px">
@@ -770,15 +768,17 @@ async function renderShopping() {
           </form>
         </div>
         <div class="card">
-          <div class="card-head"><h2>${icon('sparkle')} Suggestions</h2>
+          <div class="card-head"><h2>💡 Suggestions</h2>
             ${data.suggestions.length ? `<button class="btn sm" data-add-all>Add all</button>` : ''}</div>
+          <p class="hint">From what runs out, what you buy regularly, the meals you cook most and your favourites. The more you add to the cupboard and tap "Cooked it", the better these get.</p>
           ${data.suggestions.length ? `<ul class="list">${data.suggestions.map((s, i) => `
             <li class="row">
               <span class="emoji">${s.kind === 'food' ? foodCat(s.name).emoji : GARMENT[s.type] || '👕'}</span>
               <div class="grow"><div class="title">${s.quantity ? s.quantity + ' × ' : ''}${esc(cap(s.name))}${s.size ? ` <span class="pill plain">${esc(s.size)}</span>` : ''}</div>
                 <div class="sub">${esc(s.reason)}</div></div>
               <button class="btn sm" data-suggest="${i}">${icon('plus')} Add</button>
-            </li>`).join('')}</ul>` : emptyState('✨', 'Nothing to suggest right now.')}
+              <button class="icon-btn" data-snooze="${i}" aria-label="Not now: ${esc(s.name)}" title="Not now">${icon('x')}</button>
+            </li>`).join('')}</ul>` : emptyState('💡', 'Nothing to suggest right now.')}
         </div>
       </div>
       <div class="card">
@@ -917,6 +917,12 @@ document.addEventListener('click', guard(async (e) => {
   }
   if (d.delShop) { await api('/shopping/items/' + d.delShop, { method: 'DELETE' }); return refresh(); }
   if (t.hasAttribute('data-clear-done')) { await api('/shopping/clear-done', { method: 'POST' }); return refresh(); }
+  if (d.snooze) {
+    const s = state.suggestions[Number(d.snooze)];
+    await api('/shopping/suggestions/dismiss', { method: 'POST', body: { key: s.key } });
+    toast(`Hidden for 2 weeks: ${cap(s.name)}`);
+    return refresh();
+  }
   if (d.suggest || t.hasAttribute('data-add-all')) {
     const list = d.suggest ? [state.suggestions[Number(d.suggest)]] : state.suggestions;
     for (const s of list) {

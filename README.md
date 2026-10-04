@@ -7,6 +7,8 @@ A family web app with two tools that share one design and one set of data:
 
 It also has a shared shopping list, reminders, and optional AI help (meal ideas, and adding food or clothes from a photo) using the AI service you choose.
 
+**No AI is required.** Every feature works without one. Suggestions such as the weekly dinner plan, what to add to the shopping list (things that ran out, regulars that are due, ingredients for the meals you cook most) and when the kids need clothes all come from plain rules over your own data. AI only adds extras on top, and without it you just type a little more.
+
 ## What's in this repository
 
 | Folder | What it is |

@@ -1,21 +1,28 @@
 // Shopping list: shared by both tools. Holds items you add yourself, and suggests
-// items from the food planner (what's missing for nearly-ready meals) and the
-// clothes matcher (what each child is short of, now or in their next size).
+// items from the household's habits (habits.js: run out, regulars, usual meals), the
+// food planner (what's missing for nearly-ready meals) and the clothes matcher (what
+// each child is short of, now or in their next size). All rules, no AI.
 // Ticking an item as bought puts it in the pantry or the child's wardrobe.
 const { newId } = require('../../lib/store');
+const { habitSuggestions, norm } = require('./habits');
 const { HttpError } = require('../../lib/http');
 
 const DEFAULT = { items: [] };
+const SNOOZE_DAYS = 14; // "Not now" hides a suggestion for this long
 const KINDS = ['food', 'clothes', 'other'];
 
-function suggest({ meals, clothesStats, existing }) {
+function suggest({ meals, clothesStats, existing, habits = [], dismissed = {}, now = new Date() }) {
   const have = new Set(existing.filter((i) => !i.done).map((i) => keyOf(i)));
   const out = [];
   const add = (s) => {
-    if (have.has(keyOf(s))) return;
-    have.add(keyOf(s));
-    out.push(s);
+    const key = keyOf(s);
+    if (have.has(key) || (dismissed[key] && new Date(dismissed[key]) > now)) return;
+    have.add(key);
+    out.push({ ...s, key });
   };
+
+  // Food from the household's own habits first: run out, regulars due, usual meals.
+  habits.forEach(add);
 
   // Food: ingredients that would unlock a meal, counted by how many meals they unlock.
   const unlocks = new Map();
@@ -52,7 +59,7 @@ function suggest({ meals, clothesStats, existing }) {
   return out;
 }
 
-const keyOf = (i) => [i.kind, String(i.name).toLowerCase(), i.childId || '', i.size || ''].join('|');
+const keyOf = (i) => [i.kind, i.kind === 'food' ? norm(i.name) : String(i.name).toLowerCase(), i.childId || '', i.size || ''].join('|');
 
 function clean(input, existing = {}) {
   const it = { ...existing };
@@ -72,13 +79,31 @@ function clean(input, existing = {}) {
   return it;
 }
 
-function register(router, store, { meals, clothesStats, addPantryItem, addClothesItem }) {
+function register(router, store, { meals, mealsFor, foodHistory, favourites, pantry, clothesStats, addPantryItem, addClothesItem }) {
   const data = () => store.get('shopping', DEFAULT);
+  const dismissed = () => (data().dismissed ||= {});
 
   router.get('/api/v1/shopping', () => ({
     items: data().items,
-    suggestions: suggest({ meals: meals(), clothesStats: clothesStats(), existing: data().items }),
+    suggestions: suggest({
+      meals: meals(),
+      clothesStats: clothesStats(),
+      existing: data().items,
+      habits: habitSuggestions({ history: foodHistory(), pantry: pantry(), favourites: favourites(), mealsFor }),
+      dismissed: dismissed(),
+    }),
   }));
+
+  // "Not now": hide a suggestion for a while. It comes back if it's still true later.
+  router.post('/api/v1/shopping/suggestions/dismiss', (req, body) => {
+    if (!body || typeof body.key !== 'string' || !body.key) throw new HttpError(400, 'Which suggestion? (key)');
+    const d = dismissed();
+    const now = Date.now();
+    for (const [k, until] of Object.entries(d)) if (new Date(until) < now) delete d[k];
+    d[body.key] = new Date(now + SNOOZE_DAYS * 86400000).toISOString();
+    store.save();
+    return { ok: true, until: d[body.key] };
+  });
 
   router.post('/api/v1/shopping/items', (req, body) => {
     const item = { id: newId(), addedAt: new Date().toISOString(), ...clean(body) };

@@ -7,6 +7,8 @@ const { suitsDiet, DIETS } = require('./diet');
 const { lookupBarcode } = require('./barcode');
 
 const DEFAULT = { pantry: [], recipes: [], favourites: [] };
+// What the household adds to the cupboard and cooks, kept for shopping suggestions.
+const HISTORY_LIMIT = { added: 400, cooked: 200 };
 
 function cleanItem(input, existing = {}) {
   const it = { ...existing };
@@ -70,9 +72,24 @@ function register(router, store, familySummary) {
 
   router.get('/api/v1/food/items', () => data().pantry);
 
+  const history = () => {
+    const h = (data().history ||= {});
+    h.added ||= [];
+    h.cooked ||= [];
+    return h;
+  };
+  const remember = (list, entry) => {
+    const h = history();
+    h[list].push(entry);
+    if (h[list].length > HISTORY_LIMIT[list]) h[list].splice(0, h[list].length - HISTORY_LIMIT[list]);
+  };
+  const rememberAdded = (item) =>
+    remember('added', { name: item.name.toLowerCase(), quantity: item.quantity, unit: item.unit, at: new Date().toISOString() });
+
   const addPantryItem = (body) => {
     const item = { id: newId(), quantity: null, unit: 'pcs', category: null, expiry: null, ...cleanItem(body) };
     data().pantry.push(item);
+    rememberAdded(item);
     store.save();
     return item;
   };
@@ -84,6 +101,7 @@ function register(router, store, familySummary) {
     if (body.items.length > 200) throw new HttpError(400, 'At most 200 items at once');
     const items = body.items.map((b) => ({ id: newId(), quantity: null, unit: 'pcs', category: null, expiry: null, ...cleanItem(b) }));
     data().pantry.push(...items);
+    items.forEach(rememberAdded);
     store.save();
     return items;
   });
@@ -159,6 +177,7 @@ function register(router, store, familySummary) {
     const result = cook(data().pantry, recipe, portions(), recipes());
     if (!result.ok) throw new HttpError(409, 'Not enough in stock: ' + [...result.missing, ...result.short.map((s) => s.name)].join(', '));
     data().pantry = result.pantry;
+    remember('cooked', { recipeId: recipe.id, name: recipe.name, at: new Date().toISOString() });
     store.save();
     return { ok: true, pantry: result.pantry };
   });
@@ -167,7 +186,9 @@ function register(router, store, familySummary) {
   router.get('/api/v1/food/stats', () => stats());
 
   const meals = () => suggestMeals(data().pantry, familyRecipes(), portions(), engineOpts());
-  return { stats, meals, addPantryItem, recipes, familyRecipes, pantry: () => data().pantry, addRecipe: (b) => {
+  // Every listed recipe, however much is missing (for meals the family cooks often).
+  const mealsFor = (ids) => suggestMeals(data().pantry, recipes().filter((r) => ids.includes(r.id)), portions(), { ...engineOpts(), maxMissing: Infinity });
+  return { stats, meals, mealsFor, history, favourites, addPantryItem, recipes, familyRecipes, pantry: () => data().pantry, addRecipe: (b) => {
     const recipe = { id: newId(), ...cleanRecipe(b) };
     data().recipes.push(recipe);
     store.save();

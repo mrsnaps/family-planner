@@ -31,6 +31,10 @@ function createApp(store) {
   const clothesApi = clothes.register(router, store, fam.family);
   const shoppingApi = shopping.register(router, store, {
     meals: foodApi.meals,
+    mealsFor: foodApi.mealsFor,
+    foodHistory: foodApi.history,
+    favourites: foodApi.favourites,
+    pantry: foodApi.pantry,
     clothesStats: clothesApi.stats,
     addPantryItem: foodApi.addPantryItem,
     addClothesItem: clothesApi.addItem,

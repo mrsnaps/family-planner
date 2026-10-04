@@ -32,7 +32,7 @@ npm test             # engine and API tests
    - *Meals*: recipe cards you can filter (ready now, under 20 minutes, vegetarian, uses food going off). Each shows the ingredients scaled to your family. "Cooked it" takes them out of the cupboard; "Add to shopping" lists what's missing.
    - *My recipes*: add your own recipes with an ingredients list. They appear in meal ideas and the weekly plan.
 3. **Clothes**: pick a child. You get an outfit of the day (it changes daily, or tap Shuffle), the child's status and forecasts, their wardrobe with filters and outgrown / grow-into / worn-out labels, and every outfit idea by season.
-4. **Shopping**: your list grouped into food, clothes and other, plus suggestions you can add one at a time or all at once.
+4. **Shopping**: your list grouped into food, clothes and other, plus suggestions you can add one at a time or all at once. Suggestions come from your own habits, with no AI: food that ran out, things you buy regularly that are due again, and what's missing for the meals you cook most or have starred. Each says why, and **Not now** hides one for two weeks.
 5. **Home**: the data panel. Meals left, food to use soon, children needing clothes, the shopping list count, this week's dinners and each child's clothes and shoe forecasts.
 
 6. **Settings**: family diet (vegetarian, dairy-free, gluten-free, nut-free), your town for weather, the AI helper, typical clothes prices and backups.
@@ -93,7 +93,8 @@ Everything the UI does goes through this JSON API, and CORS is open, so a phone 
 | PUT/DELETE | `/api/v1/clothes/items/:id` | Update or remove a clothes item |
 | GET | `/api/v1/clothes/outfits/:childId?season=any&limit=50` | Ranked outfit combinations |
 | GET | `/api/v1/clothes/stats` | Per-child counts, shortfall, forecast, next-size shopping list |
-| GET | `/api/v1/shopping` | Shopping list items and suggestions |
+| GET | `/api/v1/shopping` | Shopping list items and suggestions (each with `reason`, `source` and `key`) |
+| POST | `/api/v1/shopping/suggestions/dismiss` | `{ key }`: hide a suggestion for 14 days |
 | POST | `/api/v1/shopping/items` | Add `{ name, kind: food\|clothes\|other, quantity, childId, size, type, note }` |
 | PUT/DELETE | `/api/v1/shopping/items/:id` | Update (e.g. `{ done: true }`) or remove |
 | POST | `/api/v1/shopping/items/:id/bought` | Food goes to the pantry, clothes to the child's wardrobe |
