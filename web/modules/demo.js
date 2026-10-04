@@ -59,9 +59,12 @@ async function buildSample(createApp, now = new Date()) {
     ['Chicken breast', 600, 'g', 1], ['Chopped tomatoes', 3, 'tin', 400], ['Onion', 4, 'pcs', 14], ['Garlic', 6, 'pcs', 20],
     ['Carrot', 5, 'pcs', 9], ['Cheddar', 350, 'g', 12], ['Milk', 2, 'l', 3], ['Butter', 200, 'g', 25], ['Eggs', 8, 'pcs', 10],
     ['Bread', 1, 'pack', 2], ['Bananas', 5, 'pcs', 3], ['Apples', 6, 'pcs', 12], ['Yoghurt', 4, 'pcs', 4],
-    ['Frozen peas', 900, 'g', 180], ['Fish fingers', 0, 'pack', 150], ['Tortilla wraps', 8, 'pcs', 6], ['Potatoes', 2, 'kg', 15],
+    ['Frozen peas', 900, 'g', 180, { frozen: day(-40) }], ['Fish fingers', 0, 'pack', 150, { frozen: day(-20) }], ['Tortilla wraps', 8, 'pcs', 6], ['Potatoes', 2, 'kg', 15],
+    // Lunchbox bits.
+    ['Ham', 200, 'g', 4], ['Crisps', 6, 'pcs', 60], ['Satsumas', 6, 'pcs', 10], ['Apple juice cartons', 6, 'pcs', 90], ['Cheese strings', 6, 'pcs', 14],
+    ['Chicken thighs', 500, 'g', 200, { frozen: day(-110) }],
   ];
-  await call('POST', '/api/v1/food/items/bulk', { items: pantry.map(([name, quantity, unit, days]) => ({ name, quantity, unit, expiry: day(days) })) });
+  await call('POST', '/api/v1/food/items/bulk', { items: pantry.map(([name, quantity, unit, days, extra = {}]) => ({ name, quantity, unit, expiry: day(days), ...extra })) });
   const pie = await call('POST', '/api/v1/food/recipes', {
     name: "Grandma's fish pie", servings: 4, minutes: 50, tags: ['dinner'],
     ingredients: [{ name: 'white fish', qty: 400, unit: 'g' }, { name: 'potatoes', qty: 1, unit: 'kg' }, { name: 'milk', qty: 300, unit: 'ml' }, { name: 'cheddar', qty: 100, unit: 'g' }, { name: 'frozen peas', qty: 200, unit: 'g' }],
@@ -69,6 +72,10 @@ async function buildSample(createApp, now = new Date()) {
   });
   await call('PUT', '/api/v1/food/recipes/spag-bol/favourite', { on: true });
   await call('PUT', `/api/v1/food/recipes/${pie.id}/favourite`, { on: true });
+  // Leftovers: some bolognese from last night in the fridge, and a fish pie in the freezer
+  // since the summer (old enough to get a "use it up" nudge).
+  const bol = await call('POST', '/api/v1/food/leftovers', { recipeId: 'spag-bol', portions: 3 });
+  const frozenPie = await call('POST', '/api/v1/food/leftovers', { recipeId: pie.id, portions: 4, freeze: true });
 
   // Wardrobes, with a few things outgrown, worn out or in the wash.
   const clothes = (child, list) => list.map(([name, type, colour, size, extra = {}]) => ({ childId: child.id, name, type, colour, size, season: 'all', pattern: 'plain', ...extra }));
@@ -105,6 +112,22 @@ async function buildSample(createApp, now = new Date()) {
     await call('POST', '/api/v1/chores', { starter });
   }
 
+  // What everyone thought of recent dinners (Leo has gone off macaroni cheese), and what
+  // the children won't have in their lunchboxes.
+  const who = Object.fromEntries((await call('GET', '/api/v1/food/ratings')).people.map((p) => [p.name, p.id]));
+  for (const [ago, recipeId, scores] of [
+    [1, 'spag-bol', { Alex: 1, Sam: 1, Mia: 1, Leo: 1, Ruby: 0 }],
+    [3, 'mac-cheese', { Alex: 0, Mia: 1, Leo: -1, Ruby: 1 }],
+    [5, pie.id, { Alex: 1, Sam: 1, Mia: 0, Leo: 1 }],
+    [8, 'spag-bol', { Mia: 1, Leo: 1, Ruby: 1 }],
+    [11, 'tomato-pasta', { Mia: 1, Ruby: 1, Leo: 0 }],
+    [22, 'mac-cheese', { Leo: -1, Mia: 1 }],
+  ]) {
+    await call('POST', '/api/v1/food/ratings', { recipeId, date: day(-ago), ratings: Object.entries(scores).map(([n, score]) => ({ personId: who[n], score })) });
+  }
+  await call('PUT', '/api/v1/food/lunchbox/wont-eat', { childId: mia.id, foods: ['tomatoes'] });
+  await call('PUT', '/api/v1/food/lunchbox/wont-eat', { childId: leo.id, foods: ['tuna', 'crisps'] });
+
   // Shopping: names for who added what, a few things on the list.
   await call('PUT', '/api/v1/shopping/people/me', { name: 'Alex' }, ALEX);
   await call('PUT', '/api/v1/shopping/people/me', { name: 'Sam' }, SAM);
@@ -123,6 +146,10 @@ async function buildSample(createApp, now = new Date()) {
 
   // History, moved back in time: the weekly shops, meals cooked, and chores done.
   const d = store.data;
+  const lb = d.food.pantry.find((p) => p.id === bol.id);
+  Object.assign(lb, { expiry: day(1), leftover: { ...lb.leftover, cookedAt: day(-1) } });
+  const fp = d.food.pantry.find((p) => p.id === frozenPie.id);
+  Object.assign(fp, { frozen: day(-100), leftover: { ...fp.leftover, cookedAt: day(-100) } });
   const added = [];
   for (const ago of [3, 10, 17, 24, 31, 38]) {
     for (const [name, quantity, unit] of [['milk', 2, 'l'], ['bread', 1, 'pack'], ['bananas', 6, 'pcs'], ['eggs', 12, 'pcs'], ['cheddar', 400, 'g'], ['apples', 6, 'pcs'], ['yoghurt', 4, 'pcs'], ['chicken breast', 600, 'g']]) {

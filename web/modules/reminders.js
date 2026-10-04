@@ -9,6 +9,24 @@ function reminders({ food, clothes, shopping, chores = null }) {
       title: e.days < 0 ? `${e.name} is out of date` : e.days === 0 ? `Use the ${e.name} today` : `${e.name} goes off in ${e.days} day${e.days === 1 ? '' : 's'}`,
     });
   }
+  // Leftovers in the fridge keep about 2 days: eat them or freeze them.
+  for (const l of food.leftovers || []) {
+    if (l.frozen || l.days === null || l.days > 1) continue;
+    out.push({
+      id: `food-leftover-${l.id}-${l.expiry}`, kind: 'food', level: l.days <= 0 ? 'urgent' : 'warn', date: l.expiry,
+      title: l.days < 0 ? `The ${l.name.toLowerCase()} is past its use-by` : l.days === 0 ? `Eat the ${l.name.toLowerCase()} today, or freeze it` : `Eat the ${l.name.toLowerCase()} by tomorrow, or freeze it`,
+    });
+  }
+  // Food that's been in the freezer about 3 months or more: time to use it up.
+  const old = food.freezerOld || [];
+  if (old.length > 3) {
+    out.push({ id: `food-freezer-${old.length}-${old[0].id}`, kind: 'food', level: 'info', date: null, title: `${old.length} things in the freezer to use up`, detail: old.slice(0, 4).map((f) => f.name).join(', ') });
+  } else {
+    for (const f of old) {
+      const months = Math.floor(f.days / 30);
+      out.push({ id: `food-freezer-${f.id}`, kind: 'food', level: 'info', date: null, title: `Use up the ${f.name.toLowerCase()} from the freezer`, detail: `Frozen ${months} month${months === 1 ? '' : 's'} ago.` });
+    }
+  }
   if (food.mealsLeft <= 2) {
     out.push({ id: `food-low-${food.mealsLeft}`, kind: 'food', level: food.mealsLeft === 0 ? 'urgent' : 'warn', title: food.mealsLeft === 0 ? 'No full meals left in the cupboard' : `Only ${food.mealsLeft} meal${food.mealsLeft === 1 ? '' : 's'} left in the cupboard`, date: null });
   }
