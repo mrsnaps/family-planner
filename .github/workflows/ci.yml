@@ -32,7 +32,7 @@ jobs:
           set -o pipefail
           for t in test test:e2e test:web test:account; do
             echo "::notice::starting npm run $t"
-            npm run $t 2>&1 | sed -u -e '/Error\|error\|✗\|not ok\|passed/s/^/::warning::/'
+            npm run $t 2>&1 | sed -u -e '/✓\|Error\|error\|passed/s/^/::warning::/'
           done
 
   # After the tests pass on main, publish the home screen version to Amplify.
