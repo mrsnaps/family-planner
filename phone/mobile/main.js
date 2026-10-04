@@ -6,7 +6,7 @@ import { loadData, saveData } from './storage.js';
 import { localFetcher, installFetch } from './local-api.js';
 import { withOnDevice } from './on-device.js';
 import { wrapNetwork, installBarcodeDetector, installDownloads } from './ios-shims.js';
-import { scheduleFromReminders } from './notifications.js';
+import { scheduleFromReminders, uploadWebPush } from './notifications.js';
 import { isNative } from './native.js';
 import { createAccount } from './cloud.js';
 import CLOUD from './cloud-config.js';
@@ -18,15 +18,26 @@ async function start() {
   const localFetch = localFetcher(createApp(store));
 
   let timer;
+  let account = null;
+  let forcePush = false;
   const reschedule = () => {
     clearTimeout(timer);
     // No phone reminders about the demo's made-up family.
     if (store.data.demo) return;
-    timer = setTimeout(() => scheduleFromReminders(localFetch).catch(() => {}), 3000);
+    timer = setTimeout(() => {
+      scheduleFromReminders(localFetch).catch(() => {});
+      // Home screen version, with notifications turned on in Settings: the account's server sends them.
+      uploadWebPush(localFetch, account, { force: forcePush }).then(() => (forcePush = false), () => {});
+    }, 3000);
   };
+  // Settings turned notifications on (or off) on this phone.
+  window.addEventListener('familyplanner:push', () => {
+    forcePush = true;
+    reschedule();
+  });
   // Household account: when signed in, pick up the latest saved copy before the UI starts
   // (but don't keep the app waiting when offline), and save each change online.
-  const account = (globalThis.__fpCloudConfig || CLOUD).clientId ? createAccount(store) : null;
+  account = (globalThis.__fpCloudConfig || CLOUD).clientId ? createAccount(store) : null;
   if (account) {
     await account.restore();
     if (account.status().signedIn) await Promise.race([account.syncNow(), new Promise((r) => setTimeout(r, 4000))]);

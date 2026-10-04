@@ -10,6 +10,7 @@ import { merge3 } from './merge.js';
 const SESSION_KEY = 'fp-account';
 const SYNC_KEY = 'fp-sync';
 const BASE_KEY = 'fp-sync-base'; // the copy last saved or fetched, for merging two people's changes
+const PUSH_KEY = 'fp-push'; // 'on' once notifications are turned on for this phone (localStorage)
 const cfg = () => globalThis.__fpCloudConfig || CONFIG;
 
 const MESSAGES = {
@@ -247,11 +248,27 @@ export function createAccount(store) {
     return busy.then(status);
   }
 
+  // This phone's Web Push subscription (Settings > Notifications, home screen version only).
+  async function pushOff() {
+    try {
+      if (localStorage.getItem(PUSH_KEY) !== 'on') return;
+      localStorage.removeItem(PUSH_KEY);
+    } catch {
+      return;
+    }
+    const reg = await navigator.serviceWorker?.getRegistration?.().catch(() => null);
+    const sub = await reg?.pushManager?.getSubscription().catch(() => null);
+    if (!sub) return;
+    if (session) await api('POST', { endpoint: sub.endpoint }, '/push/unsubscribe').catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+  }
+
   async function forget() {
     session = null;
     idToken = null;
     sync = { rev: null, dirty: false, savedAt: null };
     base = null;
+    try { localStorage.removeItem(PUSH_KEY); } catch {}
     await Promise.all([saveJson(SESSION_KEY, null), saveJson(SYNC_KEY, null), saveJson(BASE_KEY, null)]);
     changed();
   }
@@ -334,6 +351,7 @@ export function createAccount(store) {
     useTokens(r.AuthenticationResult);
     await settle();
     clearTimeout(timer);
+    await pushOff();
     await api('POST', {}, '/delete-account');
     await forget();
     if (clearDevice) {
@@ -354,6 +372,40 @@ export function createAccount(store) {
       return api('POST', { text, page }, '/feedback');
     },
     check,
+    // Web Push for the home screen version (infra/lambda/index.js /push/*). Settings subscribes
+    // with the browser's pushManager; main.js uploads the reminders when they change.
+    async pushKey() {
+      signedIn();
+      return (await api('GET', null, '/push/key')).publicKey;
+    },
+    async pushSubscribe(subscription) {
+      signedIn();
+      return api('POST', { subscription }, '/push/subscribe');
+    },
+    async pushUnsubscribe(endpoint) {
+      signedIn();
+      return api('POST', { endpoint }, '/push/unsubscribe');
+    },
+    async pushSchedule(items) {
+      signedIn();
+      return api('POST', { items }, '/push/schedule');
+    },
+    async pushTest() {
+      signedIn();
+      return api('POST', {}, '/push/test');
+    },
+    // "Hey Siri, add milk": a key for the iPhone Shortcut, which calls apiUrl + /shortcut/add.
+    get apiUrl() {
+      return cfg().apiUrl;
+    },
+    async shortcutKey() {
+      signedIn();
+      return (await api('POST', {}, '/shortcut/key')).key;
+    },
+    async shortcutRevoke() {
+      signedIn();
+      return api('POST', {}, '/shortcut/key/revoke');
+    },
     household,
     invite,
     join,
@@ -404,6 +456,7 @@ export function createAccount(store) {
     // Signing out keeps the data on this device, but stops saving it online.
     async signOut() {
       if (sync.dirty) await syncNow().catch(() => {});
+      await pushOff(); // reminders for this account stop coming to this phone
       const refreshToken = session?.refreshToken;
       await forget();
       if (refreshToken) cognito('RevokeToken', { Token: refreshToken }).catch(() => {});

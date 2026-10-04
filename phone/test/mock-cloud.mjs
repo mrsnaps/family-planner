@@ -1,7 +1,9 @@
 // Stand-in for the household account services in infra/cloud.yaml: the Cognito calls the
 // app makes, GET/PUT /data with the same "only if unchanged" rule as the real API, and the
-// household routes (invite codes, joining and leaving) from infra/lambda/index.js.
+// household routes (invite codes, joining and leaving) from infra/lambda/index.js, plus
+// the Web Push and Siri key routes (recorded, nothing is really sent).
 import http from 'node:http';
+import crypto from 'node:crypto';
 
 export async function startMockCloud(port) {
   const users = new Map(); // email -> { password, confirmed }
@@ -17,6 +19,8 @@ export async function startMockCloud(port) {
   };
   const calls = [];
   const feedback = [];
+  const push = { publicKey: crypto.createECDH('prime256v1').generateKeys().toString('base64url'), subs: [], schedules: [], tests: 0 };
+  const shortcut = { key: null };
   let n = 0;
   const CODE = '123456';
 
@@ -96,6 +100,26 @@ export async function startMockCloud(port) {
         feedback.push({ from: email, ...JSON.parse(raw) });
         return send(res, 200, { ok: true });
       }
+      if (req.url === '/push/key') return send(res, 200, { publicKey: push.publicKey });
+      if (req.url.startsWith('/push/')) {
+        const b = raw ? JSON.parse(raw) : {};
+        if (req.url === '/push/subscribe') {
+          if (!/^https:\/\/web\.push\.apple\.com\//.test(b.subscription?.endpoint || '')) return send(res, 400, { error: "That isn't a push address this app can use." });
+          push.subs = [...push.subs.filter((x) => x.endpoint !== b.subscription.endpoint), { ...b.subscription, email }];
+        }
+        if (req.url === '/push/unsubscribe') push.subs = push.subs.filter((x) => x.endpoint !== b.endpoint);
+        if (req.url === '/push/schedule') push.schedules.push({ email, items: b.items });
+        if (req.url === '/push/test') {
+          if (!push.subs.some((x) => x.email === email)) return send(res, 400, { error: 'Turn notifications on first.' });
+          push.tests += 1;
+        }
+        return send(res, 200, { ok: true });
+      }
+      if (req.url === '/shortcut/key') return send(res, 200, { key: (shortcut.key = crypto.randomBytes(32).toString('base64url')) });
+      if (req.url === '/shortcut/key/revoke') {
+        shortcut.key = null;
+        return send(res, 200, { ok: true });
+      }
       if (req.url === '/delete-account') {
         leave(email);
         if (!people.get(email)?.length) files.delete(email);
@@ -124,6 +148,8 @@ export async function startMockCloud(port) {
     calls,
     hasUser: (email) => users.has(email),
     feedback,
+    push,
+    shortcut,
     data: (email) => (files.get(home(email)) ? JSON.parse(files.get(home(email)).body) : null),
     close: () => server.close(),
   };

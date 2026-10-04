@@ -21,6 +21,8 @@ function at5pm(date) {
   return d;
 }
 
+// Each notification keeps the reminder's own id as `key` (the home screen version's Web Push
+// schedule uses it; iPhone notifications need the numeric id).
 export function plan(reminders, now = new Date()) {
   const next5pm = at5pm(now) > now ? at5pm(now) : at5pm(new Date(now.getTime() + 86400000));
   const out = [];
@@ -36,19 +38,46 @@ export function plan(reminders, now = new Date()) {
     } else {
       continue;
     }
-    out.push({ id: numericId(r.id), title: 'Family Planner', body: r.detail ? `${r.title}. ${r.detail}` : r.title, schedule: { at } });
+    out.push({ id: numericId(r.id), key: String(r.id), title: 'Family Planner', body: r.detail ? `${r.title}. ${r.detail}` : r.title, schedule: { at } });
     if (out.length >= MAX) break;
   }
   return out;
 }
 
+async function remindersFrom(localFetch) {
+  const res = await localFetch('/api/v1/reminders');
+  if (!res.ok) return null;
+  const body = await res.json();
+  return Array.isArray(body) ? body : body.reminders || [];
+}
+
+// Home screen version: the same reminders, sent by the household account's server as Web Push
+// (infra/lambda/index.js POST /push/schedule). Only uploaded when the list has changed.
+export const pushItems = (reminders, now) => plan(reminders, now).map((n) => ({ id: n.key, at: n.schedule.at.toISOString(), title: n.title, body: n.body }));
+let uploaded = null;
+export async function uploadWebPush(localFetch, account, { force = false } = {}) {
+  if (force) uploaded = null;
+  let on = false;
+  try { on = localStorage.getItem('fp-push') === 'on'; } catch {}
+  if (isNative() || !on || !account?.pushSchedule || !account.status().signedIn) {
+    uploaded = null;
+    return null;
+  }
+  const reminders = await remindersFrom(localFetch);
+  if (!reminders) return null;
+  const items = pushItems(reminders);
+  const json = JSON.stringify(items);
+  if (json === uploaded) return null;
+  await account.pushSchedule(items);
+  uploaded = json;
+  return items;
+}
+
 let asked = false;
 export async function scheduleFromReminders(localFetch) {
   if (!isNative()) return [];
-  const res = await localFetch('/api/v1/reminders');
-  if (!res.ok) return [];
-  const body = await res.json();
-  const reminders = Array.isArray(body) ? body : body.reminders || [];
+  const reminders = await remindersFrom(localFetch);
+  if (!reminders) return [];
 
   let perm = await LocalNotifications.checkPermissions();
   // Ask the first time there's actually something to remind about.
@@ -61,7 +90,7 @@ export async function scheduleFromReminders(localFetch) {
   const pending = await LocalNotifications.getPending();
   const ours = pending.notifications.filter((n) => n.id >= FIRST_ID);
   if (ours.length) await LocalNotifications.cancel({ notifications: ours.map((n) => ({ id: n.id })) });
-  const list = plan(reminders);
+  const list = plan(reminders).map(({ key, ...n }) => n);
   if (list.length) await LocalNotifications.schedule({ notifications: list });
   return list;
 }

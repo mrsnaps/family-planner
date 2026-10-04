@@ -18,9 +18,10 @@ const ok = (m) => console.log('✓ ' + m);
 const EMAIL = 'nathan@example.com';
 const PASSWORD = 'family123';
 
-async function open({ poll = 600000 } = {}) {
+async function open({ poll = 600000, init = '' } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await ctx.addInitScript(`globalThis.__fpCloudConfig = { region: 'eu-west-2', clientId: 'test', apiUrl: '${cloud.url}', cognitoUrl: '${cloud.url}/' }; globalThis.__fpPollMs = ${poll};`);
+  if (init) await ctx.addInitScript(init);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -48,6 +49,21 @@ async function open({ poll = 600000 } = {}) {
   return { ctx, page, api, status, sync, fill, toast, load, errors };
 }
 const pantry = async (d) => (await d.api('/food/items')).data.map((i) => i.name).sort();
+// Waits for something to happen outside the page (in the stand-in cloud).
+const until = async (check, ms = 8000) => {
+  for (const end = Date.now() + ms; !check(); await new Promise((r) => setTimeout(r, 100))) {
+    if (Date.now() > end) throw new Error('Timed out waiting');
+  }
+};
+// Headless Chromium has no push service: stand in for the browser's notification permission
+// and pushManager, as a home screen app on a phone would have them.
+const PUSH_STUB = `
+  window.__perm = 'default';
+  window.Notification = class { static get permission() { return window.__perm; } static async requestPermission() { return (window.__perm = 'granted'); } };
+  const fake = { endpoint: 'https://web.push.apple.com/test-phone', toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'p', auth: 'a' } }; }, async unsubscribe() { window.__sub = null; return true; } };
+  PushManager.prototype.getSubscription = async () => window.__sub || null;
+  PushManager.prototype.subscribe = async (o) => { window.__serverKey = o.applicationServerKey.length; return (window.__sub = fake); };
+`;
 
 try {
   // Device A: set up the family, then create an account from Settings.
@@ -243,6 +259,50 @@ try {
   assert.equal(await d.page.inputValue('#feedback-form textarea'), '');
   ok('feedback from Settings is sent with who sent it');
 
+  // Phone notifications (home screen version) and the Siri key, from Settings.
+  const e = await open({ init: PUSH_STUB });
+  await e.page.click('[data-nav="settings"]:visible');
+  await e.page.waitForSelector('#push-card :text("Sign in to get reminders on this phone")');
+  await e.page.click('[data-account="signin"]');
+  await e.fill({ email: EMAIL, password: 'newpass123' }, 'Sign in');
+  await e.toast(/Signed in/);
+  await e.page.click('#push-card [data-push="on"]');
+  await e.page.waitForSelector('#push-card :text("Notifications are on for this phone")');
+  assert.equal(await e.page.evaluate(() => window.__serverKey), 65, "subscribed with the server's key");
+  assert.deepEqual(cloud.push.subs.map((x) => x.endpoint), ['https://web.push.apple.com/test-phone']);
+  assert.equal(cloud.push.tests, 1, 'a test notification is sent');
+  await until(() => cloud.push.schedules.length === 1);
+  assert.ok(Array.isArray(cloud.push.schedules[0].items));
+  // A change that alters the reminders is uploaded again; one that doesn't isn't.
+  await e.api('/family', 'PUT', { name: 'The Testers' });
+  await e.page.waitForTimeout(3500);
+  assert.equal(cloud.push.schedules.length, 1, 'the same reminders are not uploaded twice');
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  await e.api('/food/items', 'POST', { name: 'yoghurt', quantity: 1, unit: 'pot', expiry: tomorrow });
+  await until(() => cloud.push.schedules.length === 2);
+  const item = cloud.push.schedules[1].items.find((i) => i.id.startsWith('food-expiry-'));
+  assert.ok(item && /yoghurt/.test(item.body) && !isNaN(new Date(item.at)), JSON.stringify(cloud.push.schedules[1]));
+  await e.page.click('#push-card [data-push="test"]');
+  await e.toast(/Sent/);
+  assert.equal(cloud.push.tests, 2);
+  ok('notifications: turned on from Settings, a test is sent and the reminders upload when they change');
+
+  await e.page.click('#siri-card [data-siri="setup"]');
+  await e.page.waitForSelector('#dialog-form #siri-key');
+  assert.equal(await e.page.inputValue('#siri-key'), cloud.shortcut.key);
+  assert.equal(await e.page.inputValue('#siri-url'), `${cloud.url}/shortcut/add`);
+  assert.match(await e.page.textContent('#dialog-form'), /Dictate Text[\s\S]*Get Contents of URL[\s\S]*Get Dictionary Value[\s\S]*Speak Text[\s\S]*Add to shopping/);
+  await e.page.click('#dialog-form button:has-text("Done")');
+  await e.page.click('#siri-card [data-siri="off"]');
+  await e.page.click('#dialog-form button:has-text("Turn off")');
+  await e.toast(/Siri key turned off/);
+  assert.equal(cloud.shortcut.key, null);
+  await e.page.waitForSelector('#siri-card [data-siri="setup"]:has-text("Set up Hey Siri")');
+  await e.page.click('#push-card [data-push="off"]');
+  await e.page.waitForSelector('#push-card [data-push="on"]');
+  assert.deepEqual(cloud.push.subs, []);
+  ok('Siri: a key with the Shortcut steps, and turning it off');
+
   // Deleting an account needs the password, removes the login and its online lists, and
   // (by default) clears the device. Everyone else's lists are left alone.
   const others = JSON.stringify(cloud.data(EMAIL));
@@ -261,7 +321,7 @@ try {
   assert.equal(JSON.stringify(cloud.data(EMAIL)), others);
   ok('deleting an account asks for the password, removes it online and clears the device');
 
-  for (const x of [a, b, c, d]) assert.deepEqual(x.errors, []);
+  for (const x of [a, b, c, d, e]) assert.deepEqual(x.errors, []);
   ok('no page errors');
 } finally {
   await browser.close();
