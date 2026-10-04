@@ -18,6 +18,10 @@ const state = {
 // ---------- helpers ----------
 const $ = (s, root = document) => root.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Attributes that keep browsers and password managers from filling these boxes with the
+// sign-in email and password (the AI key box is a masked text box, not a password box).
+const NOFILL = 'autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"';
+
 const plural = (n, word, many = word + 's') => `${n} ${n === 1 ? word : many}`;
 const fmtDate = (d) => new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 const fmtShort = (d) => new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -1846,22 +1850,22 @@ async function renderSettings() {
             <div class="small" style="font-weight:500">${ai.onDeviceAvailable ? 'Private and free: runs on this phone, nothing leaves it.' : esc(ai.onDeviceReason || 'Not available on this phone.')}</div></div>
           ${ai.onDeviceAvailable ? `<label class="chip"><input type="checkbox" data-ondevice ${ai.onDevice ? 'checked' : ''} style="width:auto"> Use it</label>` : ''}
         </div>` : ''}
-      <form id="ai-form" class="stack" style="margin-top:14px">
+      <form id="ai-form" class="stack" style="margin-top:14px" autocomplete="off">
         <div class="form-row" style="grid-template-columns:1fr 1fr">
           <label class="field">${onDeviceOn ? 'Extra AI (used when on-device can\'t)' : 'AI to use'}
             <select name="provider"><option value="none">None</option>${shownProviders.map((p) => `<option value="${p.id}" ${p.id === ai.provider ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></label>
           <label class="field">Model
             ${preset && preset.models.length
               ? `<select name="model">${options(preset.models, ai.model || preset.models[0])}</select>`
-              : `<input name="model" value="${esc(ai.model)}" placeholder="${preset ? 'Model name' : '—'}" ${preset ? '' : 'disabled'}>`}</label>
+              : `<input name="model" ${NOFILL} value="${esc(ai.model)}" placeholder="${preset ? 'Model name' : '—'}" ${preset ? '' : 'disabled'}>`}</label>
         </div>
         ${preset ? `
         ${preset.note ? `<p class="hint">${esc(preset.note)}</p>` : ''}
         <div class="form-row" style="grid-template-columns:1fr 1fr">
           <label class="field">API key ${ai.hasKey ? `<span class="muted">(saved${ai.apiKeyHint ? ' ' + esc(ai.apiKeyHint) : ''})</span>` : ''}
-            <input name="apiKey" type="password" autocomplete="off" placeholder="${ai.hasKey ? 'Leave blank to keep' : preset.needsKey ? 'Paste your key' : 'Not needed'}"></label>
+            <input name="apiKey" type="text" class="secret" ${NOFILL} placeholder="${ai.hasKey ? 'Leave blank to keep' : preset.needsKey ? 'Paste your key' : 'Not needed'}"></label>
           <label class="field">Server address
-            <input name="baseUrl" value="${esc(ai.baseUrl)}" placeholder="${esc(preset.baseUrl || 'https://…')}"></label>
+            <input name="baseUrl" ${NOFILL} value="${esc(ai.baseUrl)}" placeholder="${esc(preset.baseUrl || 'https://…')}"></label>
         </div>
         <div class="form-row" style="grid-template-columns:1fr 2fr">
           <label class="field">Monthly limit<input name="monthlyLimit" type="number" min="0" value="${esc(ai.monthlyLimit)}"></label>
@@ -2461,6 +2465,9 @@ document.addEventListener('submit', guard(async (e) => {
     return;
   }
   if (form.id === 'ai-form') {
+    // In case a browser still fills in the sign-in details here.
+    if (/@/.test(body.model || '')) throw new Error("That's an email address, not a model name. Clear the Model box and try again.");
+    if (body.apiKey && /@/.test(body.apiKey) && !/^sk-/.test(body.apiKey)) throw new Error("That's not an API key. Clear the API key box and paste your key.");
     const send = { model: body.model, baseUrl: body.baseUrl, monthlyLimit: body.monthlyLimit };
     if (body.apiKey) send.apiKey = body.apiKey;
     for (const k of Object.keys(send)) if (send[k] === undefined) delete send[k];

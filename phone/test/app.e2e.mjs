@@ -399,6 +399,9 @@ try {
     await api('/demo/start', 'POST');
     await page.evaluate(() => document.querySelector(`[data-nav="settings"]`).click());
     await page.waitForSelector('#customise-card');
+    // Nothing on Settings looks like a login form, so browsers don't fill the AI boxes with it.
+    assert.equal(await page.locator('#page input[type=password]').count(), 0);
+    assert.equal(await page.getAttribute('#ai-form', 'autocomplete'), 'off');
     await page.click('[data-look-accent="purple"]');
     assert.equal(await page.evaluate(() => document.documentElement.dataset.accent), 'purple');
     await page.uncheck('[data-look-tab="clothes"]');

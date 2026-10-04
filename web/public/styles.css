@@ -363,3 +363,5 @@ body.kitchen-night .main { filter: brightness(.55); }
   .k-title { order: 3; flex-basis: 100%; text-align: left; }
 }
 #k-week { column-span: all; }
+/* A typed secret that browsers don't treat as a password (so they don't autofill it). */
+input.secret { -webkit-text-security: disc; text-security: disc; }

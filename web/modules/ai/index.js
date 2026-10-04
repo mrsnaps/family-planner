@@ -136,6 +136,7 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
   const settings = () => {
     const s = store.get('ai', DEFAULT);
     for (const [k, v] of Object.entries(DEFAULT)) if (s[k] === undefined) s[k] = structuredClone(v);
+    if (/@/.test(s.model || '')) s.model = ''; // a browser once filled the sign-in email in here
     return s;
   };
   const publicSettings = () => {
@@ -201,7 +202,11 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
       }
       s.provider = body.provider;
     }
-    if (body.model !== undefined) s.model = String(body.model || '').trim();
+    if (body.model !== undefined) {
+      const m = String(body.model || '').trim();
+      if (/@/.test(m)) throw new HttpError(400, "That's an email address, not a model name.");
+      s.model = m;
+    }
     if (body.baseUrl !== undefined) {
       const u = String(body.baseUrl || '').trim();
       if (u && !/^https?:\/\//.test(u)) throw new HttpError(400, 'Server address must start with http:// or https://');
