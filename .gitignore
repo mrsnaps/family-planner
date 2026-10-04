@@ -8,3 +8,4 @@ phone/*.zip
 phone/ios/App/App/public/
 phone/ios/App/App/capacitor.config.json
 phone/ios/App/App/config.xml
+.claude/worktrees/
