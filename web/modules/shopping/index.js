@@ -4,7 +4,7 @@
 // each child is short of, now or in their next size). All rules, no AI.
 // Ticking an item as bought puts it in the pantry or the child's wardrobe.
 const { newId } = require('../../lib/store');
-const { habitSuggestions, norm } = require('./habits');
+const { habitSuggestions, usuals, lastShop, norm } = require('./habits');
 const { HttpError } = require('../../lib/http');
 
 const DEFAULT = { items: [] };
@@ -90,7 +90,34 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
     habits: habitSuggestions({ history: foodHistory(), pantry: pantry(), favourites: favourites(), mealsFor }),
     dismissed: dismissed(),
   });
-  router.get('/api/v1/shopping', () => ({ items: data().items, suggestions: ruleSuggestions() }));
+  const onList = () => new Set(data().items.filter((i) => !i.done).map(keyOf));
+  // One-tap regulars (leaving out what's already on the list) and the last big shop.
+  const quick = () => {
+    const have = onList();
+    const shop = lastShop({ history: foodHistory() });
+    return {
+      usuals: usuals({ history: foodHistory() }).filter((u) => !have.has(keyOf({ kind: 'food', ...u }))),
+      lastShop: shop && { date: shop.date, count: shop.items.length, missing: shop.items.filter((i) => !have.has(keyOf({ kind: 'food', ...i }))).length },
+    };
+  };
+  router.get('/api/v1/shopping', () => ({ items: data().items, suggestions: ruleSuggestions(), ...quick() }));
+
+  // "Same as last shop": put everything from the last big shop back on the list.
+  router.post('/api/v1/shopping/repeat-last-shop', () => {
+    const shop = lastShop({ history: foodHistory() });
+    if (!shop) throw new HttpError(404, 'No earlier shop to copy yet. Add a few things to the cupboard on the day you shop.');
+    const have = onList();
+    const added = [];
+    for (const i of shop.items) {
+      const item = { kind: 'food', name: i.name, quantity: i.quantity, unit: i.unit };
+      if (have.has(keyOf(item))) continue;
+      have.add(keyOf(item));
+      added.push({ id: newId(), addedAt: new Date().toISOString(), ...clean(item) });
+    }
+    data().items.push(...added);
+    store.save();
+    return { date: shop.date, added: added.length, skipped: shop.items.length - added.length };
+  });
 
   // "Not now": hide a suggestion for a while. It comes back if it's still true later.
   router.post('/api/v1/shopping/suggestions/dismiss', (req, body) => {
@@ -130,10 +157,7 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
 
   // Bought it: food goes into the pantry, clothes into the child's wardrobe,
   // and the item leaves the list. Body can add details (quantity, unit, colour...).
-  router.post('/api/v1/shopping/items/:id/bought', (req, body, { id }) => {
-    const d = data();
-    const item = d.items.find((x) => x.id === id);
-    if (!item) throw new HttpError(404, 'No such item');
+  function bought(item, body = {}) {
     let added = null;
     if (item.kind === 'food') {
       added = addPantryItem({
@@ -155,9 +179,38 @@ function register(router, store, { meals, mealsFor, foodHistory, favourites, pan
         }));
       }
     }
+    return added;
+  }
+
+  router.post('/api/v1/shopping/items/:id/bought', (req, body, { id }) => {
+    const d = data();
+    const item = d.items.find((x) => x.id === id);
+    if (!item) throw new HttpError(404, 'No such item');
+    const added = bought(item, body || {});
     d.items = d.items.filter((x) => x.id !== id);
     store.save();
     return { ok: true, added };
+  });
+
+  // Back from the shops: everything ticked goes into the cupboard or wardrobe in one go.
+  router.post('/api/v1/shopping/bought-ticked', () => {
+    const d = data();
+    const ticked = d.items.filter((x) => x.done);
+    const left = new Set(); // anything that can't be put away stays on the list
+    let food = 0;
+    let clothes = 0;
+    for (const item of ticked) {
+      try {
+        const added = bought(item);
+        if (item.kind === 'food') food += 1;
+        else if (added) clothes += added.length;
+      } catch {
+        left.add(item.id);
+      }
+    }
+    d.items = d.items.filter((x) => !x.done || left.has(x.id));
+    store.save();
+    return { ok: true, items: ticked.length - left.size, food, clothes, ...(left.size ? { notDone: left.size } : {}) };
   });
 
   router.post('/api/v1/shopping/clear-done', () => {

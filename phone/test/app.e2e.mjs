@@ -219,6 +219,37 @@ try {
     ok('older iPhones get a plain reason');
     await ctx.close();
   }
+
+  // 5. Quicker adding on the Shopping page: usuals, the last shop again, bought all ticked.
+  {
+    const { ctx, page, api, errors } = await open();
+    const day = (n) => new Date(Date.now() - n * 86400000).toISOString();
+    const added = [
+      ['milk', 2, 'l', 8], ['bread', 1, 'loaf', 8], ['apples', 6, 'pcs', 8],
+      ['milk', 2, 'l', 1], ['bread', 1, 'loaf', 1], ['pasta', 500, 'g', 1],
+    ].map(([name, quantity, unit, n]) => ({ name, quantity, unit, at: day(n) }));
+    const backup = (await api('/export')).data;
+    backup.data.food.history = { added, cooked: [] };
+    assert.equal((await api('/import', 'POST', backup)).status, 200);
+    await page.click('[data-nav="shopping"]:visible');
+    await page.waitForSelector('#quick-add');
+    assert.match(await page.textContent('#quick-add'), /Your usuals[\s\S]*Milk 2 l/);
+    assert.doesNotMatch(await page.textContent('#quick-add'), /Pasta|Apples/, 'bought once is not a usual');
+    await page.click('#quick-add [data-usual]:has-text("Milk")');
+    await page.waitForSelector('#page .list :text("Milk")');
+    await page.click('[data-repeat-shop]');
+    await page.waitForSelector('#quick-add :text("is on the list")');
+    assert.deepEqual((await api('/shopping')).data.items.map((i) => i.name), ['milk', 'bread', 'pasta']);
+    for (let n = 0; n < 2; n++) await page.click('#page .list [data-toggle][data-state="false"]');
+    await page.waitForSelector('#page .list .row.done >> nth=1');
+    await page.click('[data-bought-ticked]');
+    await page.waitForSelector('#toast.show:has-text("2 things in the cupboard")');
+    assert.deepEqual((await api('/shopping')).data.items.map((i) => i.name), ['pasta']);
+    assert.deepEqual((await api('/food/items')).data.map((i) => i.name).sort(), ['bread', 'milk']);
+    assert.deepEqual(errors, []);
+    ok('one-tap usuals, "Same as last shop" and "Bought all ticked" on the Shopping page');
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();

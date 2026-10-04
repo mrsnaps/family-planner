@@ -75,4 +75,37 @@ function habitSuggestions({ history = {}, pantry = [], favourites = [], mealsFor
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-module.exports = { habitSuggestions, norm };
+// The things the household buys again and again, most often first, with the amount last
+// bought, for one-tap adding. Anything bought on 2 or more different days counts.
+function usuals({ history = {}, now = new Date(), limit = 12 }) {
+  const byItem = new Map();
+  for (const e of history.added || []) {
+    if (now - new Date(e.at) > RECENT_DAYS * DAY) continue;
+    const k = norm(e.name);
+    if (!byItem.has(k)) byItem.set(k, { last: e, days: new Set() });
+    const g = byItem.get(k);
+    g.days.add(e.at.slice(0, 10));
+    if (e.at >= g.last.at) g.last = e;
+  }
+  return [...byItem.values()]
+    .filter((g) => g.days.size >= 2)
+    .sort((a, b) => b.days.size - a.days.size || (a.last.at < b.last.at ? 1 : -1))
+    .slice(0, limit)
+    .map((g) => ({ name: g.last.name, quantity: g.last.quantity ?? null, unit: g.last.unit || null, times: g.days.size }));
+}
+
+// The last big shop: the most recent day before today when 3 or more things went in the cupboard.
+function lastShop({ history = {}, now = new Date() }) {
+  const today = now.toISOString().slice(0, 10);
+  const byDay = new Map();
+  for (const e of history.added || []) {
+    const day = e.at.slice(0, 10);
+    if (day >= today) continue;
+    if (!byDay.has(day)) byDay.set(day, new Map());
+    byDay.get(day).set(norm(e.name), { name: e.name, quantity: e.quantity ?? null, unit: e.unit || null });
+  }
+  const day = [...byDay.keys()].sort().reverse().find((d) => byDay.get(d).size >= 3);
+  return day ? { date: day, items: [...byDay.get(day).values()] } : null;
+}
+
+module.exports = { habitSuggestions, usuals, lastShop, norm };

@@ -780,7 +780,8 @@ async function renderShopping() {
   state.shoppingCount = data.items.filter((i) => !i.done).length;
   $('#page-sub').textContent = `${plural(state.shoppingCount, 'thing')} to buy · tick "Bought" and it goes straight into the cupboard or wardrobe`;
   $('#page-actions').innerHTML = (data.items.some((i) => !i.done) ? `<button class="btn" data-copy-list>${icon('copy')} Copy</button>${navigator.share ? `<button class="btn" data-share-list>${icon('share')} Share</button>` : ''}` : '') +
-    (data.items.some((i) => i.done) ? `<button class="btn" data-clear-done>${icon('trash')} Clear ticked</button>` : '');
+    (data.items.some((i) => i.done) ? `<button class="btn primary" data-bought-ticked>${icon('bag')} Bought all ticked</button><button class="btn" data-clear-done>${icon('trash')} Clear ticked</button>` : '');
+  state.usuals = data.usuals || [];
   const childName = (id) => children.find((c) => c.id === id)?.name;
   const groups = { food: [], clothes: [], other: [] };
   for (const it of data.items) groups[it.kind || 'other'].push(it);
@@ -810,6 +811,7 @@ async function renderShopping() {
             <label class="field">For (clothes only)<select name="childId"><option value="">—</option>${children.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
             <button class="btn primary">${icon('plus')} Add</button>
           </form>
+          ${quickAdd(data)}
         </div>
         ${suggestionsCard(data.suggestions)}
       </div>
@@ -822,6 +824,18 @@ async function renderShopping() {
     </div>`;
   state.suggestions = data.suggestions;
   if ((state.ai = await api('/ai/settings')).suggestions) aiShopping();
+}
+
+// One tap for the things you always buy, and the whole of your last shop again.
+function quickAdd({ usuals = [], lastShop = null }) {
+  if (!usuals.length && !lastShop) return '';
+  return `<div id="quick-add" style="margin-top:14px">
+    ${usuals.length ? `<div class="group-title" style="margin-top:0">Your usuals</div>
+      <div class="chips">${usuals.map((u, i) => `<button class="chip" data-usual="${i}" title="Bought ${u.times} times lately">${icon('plus')} ${esc(cap(u.name))}${u.quantity ? ` <span class="muted">${esc(String(u.quantity))}${u.unit && u.unit !== 'pcs' ? ' ' + esc(u.unit) : ''}</span>` : ''}</button>`).join('')}</div>` : ''}
+    ${lastShop ? `<p style="margin-top:12px">${lastShop.missing
+      ? `<button class="btn" data-repeat-shop>🔁 Same as last shop</button> <span class="hint">${plural(lastShop.missing, 'thing')} from ${esc(fmtDate(lastShop.date))}</span>`
+      : `<span class="hint">Everything from your last shop (${esc(fmtDate(lastShop.date))}) is on the list.</span>`}</p>` : ''}
+  </div>`;
 }
 
 function suggestionsCard(list, ai = null) {
@@ -999,6 +1013,23 @@ document.addEventListener('click', guard(async (e) => {
     return refresh();
   }
   if (d.delShop) { await api('/shopping/items/' + d.delShop, { method: 'DELETE' }); return refresh(); }
+  if (d.usual) {
+    const u = state.usuals[Number(d.usual)];
+    await api('/shopping/items', { method: 'POST', body: { kind: 'food', name: u.name, quantity: u.quantity, unit: u.unit } });
+    toast(`Added ${cap(u.name)}`);
+    return refresh();
+  }
+  if (t.hasAttribute('data-repeat-shop')) {
+    const r = await api('/shopping/repeat-last-shop', { method: 'POST' });
+    toast(`Added ${plural(r.added, 'thing')} from your last shop`);
+    return refresh();
+  }
+  if (t.hasAttribute('data-bought-ticked')) {
+    const r = await api('/shopping/bought-ticked', { method: 'POST' });
+    const where = [r.food && `${plural(r.food, 'thing')} in the cupboard`, r.clothes && `${plural(r.clothes, 'item')} in the wardrobe`].filter(Boolean).join(' and ');
+    toast(where ? `Put away: ${where}` : 'Cleared the ticked items');
+    return refresh();
+  }
   if (t.hasAttribute('data-clear-done')) { await api('/shopping/clear-done', { method: 'POST' }); return refresh(); }
   if (d.aiRefresh) {
     if (d.aiRefresh === 'shopping') return aiShopping(true);

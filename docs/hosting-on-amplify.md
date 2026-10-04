@@ -21,7 +21,7 @@ Open the address in Safari, tap **Share**, then **Add to Home Screen**, and leav
 
 ## Updating
 
-Nothing to do. When a change is pushed to `main`, Amplify rebuilds and publishes it, and the app picks it up the next time it's opened with internet. Data on your devices isn't affected.
+Nothing to do. When a change is pushed to `main` and the tests pass, GitHub publishes it to Amplify (the `deploy` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)), and the app picks it up the next time it's opened with internet. Data on your devices isn't affected. GitHub signs in to AWS through the role in [`infra/deploy.yaml`](../infra/deploy.yaml), which can only publish this one app and only from `main`; no AWS keys are stored in GitHub.
 
 ## Cost
 
@@ -29,13 +29,13 @@ Amplify Hosting is free for the first 12 months (1,000 build minutes, 15 GB serv
 
 ## Accounts and saving online
 
-In the app, **Settings > Account** lets the household create one account (email and password, confirmed with a code by email) and sign in with it on each iPhone, iPad or computer. Every change is then saved online by itself, and the other devices pick it up when they're next opened. If two devices change things at the same moment, the first to save wins and the other device says so. Each device keeps its own AI key, which is never uploaded. Signing out keeps the data on that device but stops saving it online.
+In the app, **Settings > Account** lets each person create their own login (email and password, confirmed with a code by email) and sign in with it on each iPhone, iPad or computer. To share one household, someone already signed in taps **Invite someone** and passes on the 8-character code (it works for 7 days); the other person signs in with their own email, taps **Join a household** and enters it. Their device then switches to the household's lists. **Leave household** takes them back to their own lists, starting from a copy. Every change is then saved online by itself, and the other devices pick it up when they're next opened. If two devices change things at the same moment, the first to save wins and the other device says so. Each device keeps its own AI key, which is never uploaded. Signing out keeps the data on that device but stops saving it online.
 
 Behind it is the CloudFormation stack `family-planner-cloud` in London ([`infra/cloud.yaml`](../infra/cloud.yaml)):
 - **Amazon Cognito** for sign-in (Lite tier, free up to 10,000 people a month). Codes come from Cognito's own email address, which is limited to 50 emails a day.
 - **S3** holds one private file per household. Old copies are kept for 30 days, so a bad change can be undone from the AWS console.
-- **API Gateway and a small Lambda function** read and save that file, only for the signed-in household.
+- **API Gateway and a small Lambda function** ([`infra/lambda/index.js`](../infra/lambda/index.js)) read and save that file for the people in that household, and handle invites. After editing the function, run `node infra/build.mjs` to copy it into the template; CI checks they match and runs its tests.
 
 For one family this costs nothing within the free tiers, and pennies a month after them. The app's address and IDs are in [`phone/mobile/cloud-config.js`](../phone/mobile/cloud-config.js). If the app moves to a new address, update the stack's `AppOrigin` parameter so the new address is allowed to save.
 
-Not done yet: separate logins for each family member (everyone shares the household login), and merging two devices' changes made at the same moment.
+Not done yet: merging two people's changes made at the same moment (the first save still wins).
