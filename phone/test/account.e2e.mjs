@@ -8,6 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMockCloud } from './mock-cloud.mjs';
 
+// Opens a page the way a person would: from the bottom bar, or from More when it's in there.
+async function tapNav(page, id) {
+  if (!(await page.locator(`[data-nav="${id}"]:visible`).count())) await page.click('[data-more-toggle]:visible');
+  await page.click(`[data-nav="${id}"]:visible`);
+}
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 5178;
 const srv = spawn('node', [path.join(ROOT, 'scripts', 'serve.mjs')], { env: { ...process.env, PORT: String(PORT) } });
@@ -71,7 +77,7 @@ try {
   await a.api('/family/children', 'POST', { name: 'Sam', birthDate: '2021-03-01', clothingSize: '4-5Y', shoeSize: '10' });
   await a.api('/ai/settings', 'PUT', { provider: 'anthropic' });
   await a.api('/ai/settings', 'PUT', { apiKey: 'sk-secret-key' });
-  await a.page.click('[data-nav="settings"]:visible');
+  await tapNav(a.page, 'settings');
   await a.page.waitForSelector('#account-card');
   assert.match(await a.page.textContent('#account-card'), /Only on this device/);
   await a.page.click('[data-account="signup"]');
@@ -128,7 +134,7 @@ try {
   await a.load();
   assert.equal((await a.status()).signedIn, true);
   assert.deepEqual(await pantry(a), ['beans', 'pasta', 'rice']);
-  await a.page.click('[data-nav="settings"]:visible');
+  await tapNav(a.page, 'settings');
   await a.page.click('[data-account="signout"]');
   await a.page.click('#dialog-form button:has-text("Sign out")');
   await a.page.waitForSelector('#account-card :text("Only on this device")');
@@ -141,7 +147,7 @@ try {
   // A device that already has its own data asks which copy to keep.
   const c = await open();
   await c.api('/family/children', 'POST', { name: 'Ava', birthDate: '2019-06-01', clothingSize: '6-7Y', shoeSize: '12' });
-  await c.page.click('[data-nav="settings"]:visible');
+  await tapNav(c.page, 'settings');
   await c.page.click('[data-account="signin"]');
   await c.fill({ email: EMAIL, password: PASSWORD }, 'Sign in');
   await c.page.waitForSelector('#dialog-form :text("Which data should this device use?")');
@@ -175,7 +181,7 @@ try {
   const d = await open({ poll: 400 });
   await d.api('/food/items', 'POST', { name: 'crisps', quantity: 1, unit: 'bag' });
   // New people can register from the Sign in box too (the email they typed carries over).
-  await d.page.click('[data-nav="settings"]:visible');
+  await tapNav(d.page, 'settings');
   await d.page.click('[data-account="signin"]');
   await d.page.fill('#dialog-form input[name=email]', 'partner@example.com');
   await d.page.click('#dialog-form [data-account="to-signup"]');
@@ -206,12 +212,12 @@ try {
   ok("each person's changes reach the rest of the household");
 
   // Shopping together: the list updates live on the other phone, showing who added what.
-  await d.page.click('[data-nav="settings"]:visible');
+  await tapNav(d.page, 'settings');
   await d.page.click('[data-account="name"]');
   await d.fill({ name: 'Jo' }, 'Save');
   await d.page.waitForSelector('#account-card :text("show as Jo")');
-  await d.page.click('[data-nav="shopping"]:visible');
-  await c.page.click('[data-nav="shopping"]:visible');
+  await tapNav(d.page, 'shopping');
+  await tapNav(c.page, 'shopping');
   await c.page.fill('#shop-form input[name=name]', 'Bananas');
   await c.page.click('#shop-form button.primary');
   await d.page.waitForSelector('#shop-list :text("Bananas")', { timeout: 5000 });
@@ -223,7 +229,7 @@ try {
   await c.page.waitForSelector('#shop-list :text("Added by Jo")');
   assert.doesNotMatch(await c.page.textContent('#shop-list'), /Added by Nathan/, 'your own items say nothing');
   ok('the shared list updates live on the other phone and shows who added each thing');
-  await d.page.click('[data-nav="settings"]:visible');
+  await tapNav(d.page, 'settings');
   await d.page.click('[data-account="leave"]');
   await d.page.click('#dialog-form button:has-text("Leave")');
   await d.toast(/left the household/);
@@ -248,7 +254,7 @@ try {
   ok('the demo stays on the device: nothing is saved online, and the real lists come back');
 
   // Feedback from Settings is sent with who sent it.
-  await d.page.click('[data-nav="settings"]:visible');
+  await tapNav(d.page, 'settings');
   await d.page.waitForSelector('#feedback-form');
   await d.page.waitForFunction(() => !window.FamilyPlannerAccount.status().syncing);
   await d.page.waitForTimeout(300); // let the household line finish loading
@@ -268,7 +274,7 @@ try {
 
   // Phone notifications (home screen version) and the Siri key, from Settings.
   const e = await open({ init: PUSH_STUB });
-  await e.page.click('[data-nav="settings"]:visible');
+  await tapNav(e.page, 'settings');
   await e.page.waitForSelector('#push-card :text("Sign in to get reminders on this phone")');
   await e.page.click('[data-account="signin"]');
   await e.fill({ email: EMAIL, password: 'newpass123' }, 'Sign in');
@@ -313,7 +319,7 @@ try {
   // Deleting an account needs the password, removes the login and its online lists, and
   // (by default) clears the device. Everyone else's lists are left alone.
   const others = JSON.stringify(cloud.data(EMAIL));
-  await d.page.click('[data-nav="settings"]:visible');
+  await tapNav(d.page, 'settings');
   await d.page.click('[data-account="delete"]');
   await d.fill({ password: 'wrong-pass1' }, 'Delete account');
   await d.page.waitForSelector('#dialog-form :text("That password isn\'t right")');

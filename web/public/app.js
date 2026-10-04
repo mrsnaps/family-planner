@@ -101,6 +101,7 @@ const ICONS = {
   alert: '<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/>',
   shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
   ruler: '<path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   bag: '<path d="M5 8h14l-1 13H6z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
@@ -184,7 +185,7 @@ const TOOLS = ['food', 'clothes', 'shopping', 'chores', 'calendar'];
 
 // ---------- look and layout (each device chooses its own) ----------
 const LOOK_DEFAULT = {
-  accent: 'green', size: 'normal', hidden: [], start: 'home',
+  accent: 'green', size: 'normal', hidden: [], start: 'home', tabs: ['food', 'clothes', 'shopping'],
   kitchen: { panels: ['dinner', 'calendar', 'chores', 'shopping', 'food', 'outfits', 'reminders'], awake: true, dim: true },
 };
 const ACCENTS = [['green', 'Green', '#2e6b57'], ['blue', 'Blue', '#2f5fa8'], ['purple', 'Purple', '#6a4bb0'], ['orange', 'Orange', '#b65a1e'], ['pink', 'Pink', '#b03a72'], ['teal', 'Teal', '#1f7a85'], ['slate', 'Slate', '#4a5568']];
@@ -207,20 +208,54 @@ function saveLook() {
 applyLook();
 const shownPages = () => PAGES.filter((p) => !p.hidden && !look.hidden.includes(p.id));
 
+// On a phone the bottom bar has room for five: Home, three chosen tabs, and More for the rest.
+const BOTTOM_TABS = 3;
+function bottomTabs() {
+  const pages = shownPages();
+  if (pages.length <= BOTTOM_TABS + 2) return { main: pages, more: [] };
+  const chosen = (look.tabs || []).filter((id) => id !== 'home' && pages.some((p) => p.id === id));
+  for (const p of pages) if (chosen.length < BOTTOM_TABS && p.id !== 'home' && p.id !== 'settings' && !chosen.includes(p.id)) chosen.push(p.id);
+  const main = pages.filter((p) => p.id === 'home' || chosen.slice(0, BOTTOM_TABS).includes(p.id));
+  return { main, more: pages.filter((p) => !main.includes(p)) };
+}
+
 function renderNav() {
-  const btn = (p, mobile) => `
+  const btn = (p) => `
     <button data-nav="${p.id}" class="${state.page === p.id ? 'active' : ''}" aria-current="${state.page === p.id ? 'page' : 'false'}">
       ${icon(p.icon)}<span>${p.label}</span>
       ${p.id === 'shopping' && state.shoppingCount ? `<span class="count">${state.shoppingCount}</span>` : ''}
     </button>`;
   const pages = shownPages();
   $('#nav').innerHTML = pages.map((p) => btn(p)).join('');
-  $('#tabbar').innerHTML = pages.map((p) => btn(p, true)).join('');
-  $('#tabbar').style.gridTemplateColumns = `repeat(${pages.length}, minmax(0, 1fr))`;
-  $('#tabbar').dataset.many = String(pages.length > 7);
+  const { main, more } = bottomTabs();
+  const inMore = more.some((p) => p.id === state.page) || ['kids', 'kitchen'].includes(state.page);
+  const extras = [
+    ...(state.family?.children?.length && !look.hidden.includes('chores') ? [{ id: 'kids', label: "Kids' view", icon: 'people' }] : []),
+    { id: 'kitchen', label: 'Kitchen', icon: 'home' },
+  ];
+  $('#tabbar').innerHTML = main.map((p) => btn(p)).join('') + (more.length ? `
+    <button data-more-toggle class="${inMore ? 'active' : ''}" aria-expanded="${state.moreOpen ? 'true' : 'false'}" aria-controls="more-sheet">
+      ${icon('grid')}<span>More</span>${more.some((p) => p.id === 'shopping') && state.shoppingCount ? `<span class="count">${state.shoppingCount}</span>` : ''}</button>
+    <div class="more-sheet ${state.moreOpen ? 'open' : ''}" id="more-sheet" role="menu">
+      ${more.map((p) => btn(p)).join('')}
+      ${extras.map((p) => `<button data-nav="${p.id}" class="extra">${icon(p.icon)}<span>${esc(p.label)}</span></button>`).join('')}
+    </div>` : '');
+  $('#tabbar').style.gridTemplateColumns = `repeat(${main.length + (more.length ? 1 : 0)}, minmax(0, 1fr))`;
+  document.body.classList.toggle('more-open', Boolean(state.moreOpen && more.length));
   const dark = currentTheme() === 'dark';
   $('#theme-btn').innerHTML = `${icon(dark ? 'sun' : 'moon')}<span>${dark ? 'Light mode' : 'Dark mode'}</span>`;
 }
+function setMore(open) {
+  state.moreOpen = open;
+  $('#more-sheet')?.classList.toggle('open', open);
+  $('[data-more-toggle]')?.setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('more-open', open);
+}
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-more-toggle]')) return setMore(!state.moreOpen);
+  if (state.moreOpen && (e.target.closest('[data-nav]') || !e.target.closest('#more-sheet'))) setMore(false);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.moreOpen) setMore(false); });
 
 function currentTheme() {
   const t = document.documentElement.dataset.theme;
@@ -2605,6 +2640,10 @@ function customiseCard() {
     return `<label class="chip check-chip"><input type="checkbox" data-look-tab="${t}" ${look.hidden.includes(t) ? '' : 'checked'}> ${pg.label === 'Shop' ? 'Shopping' : pg.label}</label>`;
   }).join('')}</div>
           <span class="hint">Hidden tools also leave the Home page. Nothing is deleted.</span></div>
+        <div class="field" style="margin-top:14px">On a phone, along the bottom
+          <div class="chips" style="margin-top:6px" id="bottom-tabs">${PAGES.filter((p) => !p.hidden && p.id !== 'home').map((p) =>
+    `<label class="chip check-chip"><input type="checkbox" data-look-bottom="${p.id}" ${(look.tabs || []).includes(p.id) ? 'checked' : ''} ${look.hidden.includes(p.id) ? 'disabled' : ''}> ${p.label === 'Shop' ? 'Shopping' : esc(p.label)}</label>`).join('')}</div>
+          <span class="hint">Pick ${BOTTOM_TABS}. Home is always there, and everything else is under More.</span></div>
         <label class="field" style="margin-top:14px">Open the app on
           <select data-look-start>${PAGES.filter((p) => p.id !== 'settings').map((p) =>
     `<option value="${p.id}" ${look.start === p.id ? 'selected' : ''}>${p.id === 'kitchen' ? 'Kitchen screen' : p.title}</option>`).join('')}</select></label>
@@ -2663,6 +2702,14 @@ document.addEventListener('change', (e) => {
       look.start = 'home';
       if ($('[data-look-start]')) $('[data-look-start]').value = 'home';
     }
+  } else if (d.lookBottom) {
+    const on = (look.tabs || []).filter((x) => x !== d.lookBottom);
+    if (t.checked) on.push(d.lookBottom);
+    if (on.length > BOTTOM_TABS) {
+      t.checked = false;
+      return toast(`Up to ${BOTTOM_TABS}: untick one first`);
+    }
+    look.tabs = on;
   } else if (d.lookStart !== undefined) look.start = t.value;
   else if (d.lookPanel) {
     const on = new Set(look.kitchen.panels);

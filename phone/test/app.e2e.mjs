@@ -8,6 +8,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMockAI, answerFor, MEAL } from './mock-ai.mjs';
 
+// Opens a page the way a person would: from the bottom bar, or from More when it's in there.
+async function tapNav(page, id) {
+  if (!(await page.locator(`[data-nav="${id}"]:visible`).count())) await page.click('[data-more-toggle]:visible');
+  await page.click(`[data-nav="${id}"]:visible`);
+}
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = process.env.SHOTS || path.join(ROOT, 'test', 'shots');
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -87,13 +93,13 @@ try {
     assert.equal(sm.status, 200, JSON.stringify(sm.data));
     assert.equal(sm.data.by, 'mock');
     assert.equal(sm.data.picks[0].why, 'Uses the chicken before it goes off.');
-    await page.click('[data-nav="shopping"]:visible');
+    await tapNav(page, 'shopping');
     await page.waitForSelector('#suggest-card :text("Teabags")');
     assert.match(await page.textContent('#suggest-card'), /✨ AI/);
-    await page.click('[data-nav="settings"]:visible');
+    await tapNav(page, 'settings');
     await page.click('[data-ai-suggestions]');
     await page.waitForSelector('[data-ai-suggestions]:not(:checked)');
-    await page.click('[data-nav="shopping"]:visible');
+    await tapNav(page, 'shopping');
     await page.waitForSelector('#suggest-card');
     assert.doesNotMatch(await page.textContent('#suggest-card'), /Teabags|✨ AI/);
     await api('/ai/settings', 'PUT', { useForSuggestions: true });
@@ -159,7 +165,7 @@ try {
     const deviceCalls = await page.evaluate(() => globalThis.__fpOnDeviceMock.calls.length);
     assert.equal((await api('/ai/suggest/shopping', 'POST', {})).data.cached, true);
     assert.equal(await page.evaluate(() => globalThis.__fpOnDeviceMock.calls.length), deviceCalls, 'unchanged data is answered from memory');
-    await page.click('[data-nav="clothes"]:visible');
+    await tapNav(page, 'clothes');
     await page.waitForSelector('#ootd-body :text("Comfy for the park")');
     ok('suggestions and outfits run on the iPhone AI, and repeat questions are answered from memory');
     assert.equal(ai.calls.length, extraCalls); // nothing went to an extra AI
@@ -231,7 +237,7 @@ try {
     const backup = (await api('/export')).data;
     backup.data.food.history = { added, cooked: [] };
     assert.equal((await api('/import', 'POST', backup)).status, 200);
-    await page.click('[data-nav="shopping"]:visible');
+    await tapNav(page, 'shopping');
     await page.waitForSelector('#quick-add');
     assert.match(await page.textContent('#quick-add'), /Your usuals[\s\S]*Milk 2 l/);
     assert.doesNotMatch(await page.textContent('#quick-add'), /Pasta|Apples/, 'bought once is not a usual');
@@ -262,7 +268,7 @@ try {
     ok('food spending: asked after a shop, added by hand, totalled for the month');
 
     // Shop for the week from the home page: fills the gaps and adds what's needed.
-    await page.click('[data-nav="home"]:visible');
+    await tapNav(page, 'home');
     await page.click('[data-week-shop]');
     await page.waitForSelector('#dialog-form :text("Shop for the week")');
     const adds = Number((await page.textContent('#dialog-form button:has-text("to the list")')).match(/\d+/)[0]);
@@ -278,8 +284,8 @@ try {
     const amy = (await api('/family/children', 'POST', { name: 'Amy', birthDate: '2018-01-01', clothingSize: '8-9Y', shoeSize: '1' })).data;
     const ben = (await api('/family/children', 'POST', { name: 'Ben', birthDate: '2020-06-01', clothingSize: '6-7Y', shoeSize: '12' })).data;
     for (const n of ['Red top', 'Blue top']) await api('/clothes/items', 'POST', { childId: amy.id, name: n, type: 'top', size: '6-7Y', colour: 'red' });
-    await page.click('[data-nav="clothes"]:visible');
-    await page.click('[data-nav="home"]:visible');
+    await tapNav(page, 'clothes');
+    await tapNav(page, 'home');
     await page.waitForSelector('#week-strip');
     await page.waitForSelector('#page :text("Counting 2 hand-me-downs from Amy")');
     await page.waitForSelector('[data-pass-all]');
@@ -294,7 +300,7 @@ try {
   {
     const { ctx, page, api, errors } = await open();
     const ava = (await api('/family/children', 'POST', { name: 'Ava', birthDate: '2016-01-01', clothingSize: '9-10Y', shoeSize: '3' })).data;
-    await page.click('[data-nav="chores"]:visible');
+    await tapNav(page, 'chores');
     await page.waitForSelector('#chores-today :text("No chores yet")');
     await page.click('[data-chore-starter="dishes"]');
     await page.waitForSelector('#chores-today :text("Wash up or load the dishwasher")');
@@ -317,7 +323,7 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'nothing wider than the phone');
     ok('chores: add from common ones or your own, tick off for points and pocket money, undo');
 
-    await page.click('[data-nav="home"]:visible');
+    await tapNav(page, 'home');
     await page.waitForSelector('#chores-home :text("Feed the hamster")');
     await page.click(`#chores-home [data-chore-done="${hamster.id}"]`);
     for (let i = 0; i < 20 && (await api('/chores')).data.stats.doneToday !== 1; i++) await page.waitForTimeout(100);
@@ -325,7 +331,7 @@ try {
     ok("today's chores show on Home and can be ticked off there");
 
     await api('/ai/settings', 'PUT', { provider: 'custom', baseUrl: 'http://localhost:5174/v1', model: 'mock' });
-    await page.click('[data-nav="chores"]:visible');
+    await tapNav(page, 'chores');
     await page.waitForSelector('#chores-by :text("Ask again")');
     await page.waitForSelector('#chore-ideas :text("Water the plants")');
     assert.match(await page.textContent('#chore-ideas'), /✨ AI/);
@@ -368,7 +374,7 @@ try {
   {
     const { ctx, page, api, errors } = await open();
     await api('/family/children', 'POST', { name: 'Real kid', birthDate: '2019-01-01' });
-    await page.click('[data-nav="settings"]:visible');
+    await tapNav(page, 'settings');
     await page.waitForSelector('#about-line');
     assert.equal(await page.locator('#demo-card').isVisible(), false, 'the demo is hidden at first');
     for (let i = 0; i < 5; i++) await page.click('#about-line');
@@ -377,7 +383,7 @@ try {
     await page.waitForSelector('#demo-banner:has-text("sample family")');
     await page.waitForSelector('#page :text("Mia")');
     for (const nav of ['home', 'food', 'clothes', 'shopping', 'chores', 'family']) {
-      await page.click(`[data-nav="${nav}"]:visible`);
+      await tapNav(page, nav);
       await page.waitForFunction((n) => document.querySelector(`#tabbar [data-nav="${n}"]`)?.classList.contains('active'), nav);
       await page.waitForTimeout(400);
       assert.equal(await page.locator('#demo-banner').isVisible(), true);
@@ -482,6 +488,37 @@ try {
     assert.deepEqual([...errors, ...other.errors], []);
     ok('first-run guide walks a new family through the three steps, and can be skipped');
     await other.ctx.close();
+    await ctx.close();
+  }
+  // 11. The bottom bar on a phone: Home, three tabs and More, which can be changed in Customise.
+  {
+    const { ctx, page, errors } = await open();
+    await page.waitForSelector('#tabbar [data-more-toggle]');
+    const tabs = () => page.$$eval('#tabbar > button', (bs) => bs.map((b) => b.textContent.trim()));
+    assert.deepEqual(await tabs(), ['Home', 'Food', 'Clothes', 'Shop', 'More']);
+    await page.click('[data-more-toggle]');
+    await page.waitForSelector('#more-sheet.open');
+    await page.screenshot({ path: `${SHOTS}/more-menu.png` });
+    await page.click('#more-sheet [data-nav="calendar"]');
+    await page.waitForSelector('#page-title:has-text("Calendar")');
+    assert.equal(await page.locator('#more-sheet.open').count(), 0, 'More closes after picking');
+    assert.ok(await page.locator('[data-more-toggle].active').count(), 'More shows where you are');
+    await page.click('[data-more-toggle]');
+    await page.mouse.click(200, 200);
+    assert.equal(await page.locator('#more-sheet.open').count(), 0, 'tapping outside closes More');
+    // Swap Clothes for Chores along the bottom.
+    await tapNav(page, 'settings');
+    await page.waitForSelector('#bottom-tabs');
+    await page.uncheck('[data-look-bottom="clothes"]');
+    await page.check('[data-look-bottom="chores"]');
+    await page.click('[data-look-bottom="family"]');
+    assert.equal(await page.isChecked('[data-look-bottom="family"]'), false, 'no more than three');
+    assert.deepEqual(await tabs(), ['Home', 'Food', 'Shop', 'Chores', 'More']);
+    await page.reload();
+    await page.waitForSelector('#tabbar [data-more-toggle]');
+    assert.deepEqual(await tabs(), ['Home', 'Food', 'Shop', 'Chores', 'More'], 'remembered on this device');
+    assert.deepEqual(errors, []);
+    ok('the phone bar has Home, three tabs and More, and the three can be changed');
     await ctx.close();
   }
   console.log('\nAll phone app checks passed.');
