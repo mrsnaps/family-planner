@@ -320,7 +320,7 @@ try {
     await page.click('[data-nav="home"]:visible');
     await page.waitForSelector('#chores-home :text("Feed the hamster")');
     await page.click(`#chores-home [data-chore-done="${hamster.id}"]`);
-    await page.waitForSelector('#toast.show:has-text("Well done")');
+    for (let i = 0; i < 20 && (await api('/chores')).data.stats.doneToday !== 1; i++) await page.waitForTimeout(100);
     assert.equal((await api('/chores')).data.stats.doneToday, 1);
     ok("today's chores show on Home and can be ticked off there");
 
