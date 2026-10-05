@@ -9,7 +9,7 @@ const { TYPES } = require('../clothes/engine');
 const SUGGEST = require('./suggest');
 
 const UNITS = ['g', 'kg', 'ml', 'l', 'pcs', 'tin', 'pack'];
-const DEFAULT = { provider: 'none', model: '', baseUrl: '', apiKey: '', onDevice: true, useForSuggestions: true, monthlyLimit: 100, usage: { month: '', count: 0 } };
+const DEFAULT = { provider: 'none', model: '', baseUrl: '', apiKey: '', onDevice: true, useForSuggestions: true, monthlyLimit: 100, usage: { month: '', count: 0 }, chatLimit: 300, chatUsage: { month: '', count: 0 } };
 
 const SCHEMAS = {
   'meal-ideas': {
@@ -218,6 +218,11 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
     }
     if (body.onDevice !== undefined) s.onDevice = Boolean(body.onDevice);
     if (body.useForSuggestions !== undefined) s.useForSuggestions = Boolean(body.useForSuggestions);
+    if (body.chatLimit !== undefined) {
+      const n = Number(body.chatLimit);
+      if (!Number.isInteger(n) || n < 0) throw new HttpError(400, 'chatLimit must be a whole number (0 = no limit)');
+      s.chatLimit = n;
+    }
     if (body.monthlyLimit !== undefined) {
       const n = Number(body.monthlyLimit);
       if (!Number.isInteger(n) || n < 0) throw new HttpError(400, 'monthlyLimit must be a whole number (0 = no limit)');
@@ -325,7 +330,39 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
     return { kind, items };
   });
 
-  return { publicSettings };
+  // For the chat (modules/chat): it has its own monthly count, so chatting can't use up the
+  // suggestions' limit. Each message counts once, however many look-ups it needs.
+  const chatSpend = () => {
+    const s = settings();
+    const month = new Date().toISOString().slice(0, 7);
+    if (s.chatUsage.month !== month) s.chatUsage = { month, count: 0 };
+    if (s.chatLimit && s.chatUsage.count >= s.chatLimit) {
+      throw new HttpError(429, `This month's chat limit (${s.chatLimit} messages) is used up. Raise it in AI settings.`);
+    }
+    s.chatUsage.count++;
+    store.save();
+  };
+  const chat = {
+    ready: () => publicSettings().ready,
+    useAI: () => publicView().suggestions,
+    label: () => { const s = settings(); return s.model || presetFor(s.provider)?.label || s.provider; },
+    ask: async (request) => {
+      try {
+        return await callProvider(settings(), request);
+      } catch (e) {
+        if (e instanceof TypeError) throw e; // no connection: the chat falls back to its rules
+        throw new HttpError(e.status || 502, e.message);
+      }
+    },
+    chatSpend,
+    chatUsage: () => {
+      const s = settings();
+      const month = new Date().toISOString().slice(0, 7);
+      return { limit: s.chatLimit, used: s.chatUsage.month === month ? s.chatUsage.count : 0 };
+    },
+  };
+
+  return { publicSettings, chat };
 }
 
 module.exports = { register, SCHEMAS, SYSTEM, mealPrompt };

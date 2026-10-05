@@ -408,3 +408,33 @@ test('deleting an account removes its notification and Siri files', async () => 
   // Every other route still needs signing in.
   assert.equal((await handler({ headers: {}, rawPath: '/push/key', requestContext: { http: { method: 'GET' } } })).statusCode, 401);
 });
+
+test('"Tell Family Planner": Siri sentences use the chat\'s rules, the rest waits for the app', async () => {
+  await call('una', 'PUT', '/data', { data: {
+    family: { adults: 2, children: [{ id: 'leo', name: 'Leo' }] },
+    chores: { list: [{ id: 'bins', name: 'Put the bins out', effort: 2, who: null }], log: [], adults: [{ id: 'adult-1', name: 'Una' }] },
+    shopping: { items: [] },
+  } });
+  const { key } = (await call('una', 'POST', '/shortcut/key')).body;
+  const say = async (text) => {
+    const r = await handler({ headers: {}, rawPath: '/shortcut/add', body: JSON.stringify({ key, text }), requestContext: { http: { method: 'POST' } } });
+    return { status: r.statusCode, body: JSON.parse(r.body) };
+  };
+  let r = await say('we need milk and bin bags and Leo did the bins');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.message, 'Added Milk and Bin bags to the shopping list. Leo did put the bins out');
+  let data = (await call('una', 'GET', '/data')).body.data;
+  assert.deepEqual(data.shopping.items.map((i) => [i.name, i.kind, i.addedBy]), [['Milk', 'food', 'una@example.com'], ['Bin bags', 'other', 'una@example.com']]);
+  assert.deepEqual(data.chores.log.map((e) => [e.choreId, e.by, e.effort, e.tickedBy]), [['bins', 'leo', 2, 'una@example.com']]);
+  assert.equal(data.chores.list[0].lastDone, data.chores.log[0].at);
+
+  r = await say('spent £12.50 at Tesco and what goes with fish fingers');
+  assert.equal(r.body.message, "Recorded £12.50 at Tesco. I'll do the rest when you next open the app");
+  data = (await call('una', 'GET', '/data')).body.data;
+  assert.deepEqual(data.shopping.spending.map((e) => [e.amount, e.shop, e.addedBy]), [[12.5, 'Tesco', 'una@example.com']]);
+  assert.deepEqual(data.chat.inbox.map((m) => [m.text, m.by]), [['what goes with fish fingers', 'una@example.com']]);
+
+  r = await say('Leo has swimming every Thursday');
+  assert.equal(r.body.message, "I'll do that when you next open the app");
+  assert.equal((await say('  ')).status, 400);
+});

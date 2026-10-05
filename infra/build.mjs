@@ -6,7 +6,7 @@ const dir = new URL('.', import.meta.url);
 // A line ending "// @inline" that requires a file of the repo is replaced by that file's
 // code, so the template stays one self-contained index.js.
 const code = readFileSync(new URL('lambda/index.js', dir), 'utf8').replace(
-  /^const (\{[^}]+\}) = require\('([^']+)'\); \/\/ @inline$/m,
+  /^const (\{[^}]+\}) = require\('([^']+)'\); \/\/ @inline$/gm,
   (line, names, rel) => {
     const src = readFileSync(new URL(rel + '.js', new URL('lambda/', dir)), 'utf8');
     return `const ${names} = (() => {\n  const module = { exports: {} };\n${src.trimEnd().split('\n').map((l) => (l ? '  ' + l : '')).join('\n')}\n  return module.exports;\n})();`;

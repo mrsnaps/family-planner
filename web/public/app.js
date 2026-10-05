@@ -101,6 +101,9 @@ const ICONS = {
   alert: '<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/>',
   shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  send: '<path d="M4 12 20 4l-6 16-3-7z"/><path d="m11 13 9-9"/>',
   grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
   ruler: '<path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
@@ -226,7 +229,7 @@ function renderNav() {
       ${p.id === 'shopping' && state.shoppingCount ? `<span class="count">${state.shoppingCount}</span>` : ''}
     </button>`;
   const pages = shownPages();
-  $('#nav').innerHTML = pages.map((p) => btn(p)).join('');
+  $('#nav').innerHTML = pages.map((p) => btn(p)).join('') + (state.page === 'kids' ? '' : `<button data-ask-open class="nav-ask">${icon('chat')}<span>Ask</span></button>`);
   const { main, more } = bottomTabs();
   const inMore = more.some((p) => p.id === state.page) || ['kids', 'kitchen'].includes(state.page);
   const extras = [
@@ -271,6 +274,7 @@ $('#theme-btn').addEventListener('click', () => {
 
 function go(page) {
   state.page = PAGES.some((p) => p.id === page) ? page : 'home';
+  if (state.page === 'kids' && chat.open) chatClose();
   document.body.classList.toggle('kitchen-mode', state.page === 'kitchen');
   document.body.classList.toggle('kids-mode', state.page === 'kids');
   if (state.page !== 'kitchen') kitchenOff();
@@ -302,6 +306,8 @@ async function refresh() {
     $('#page').classList.add('fade-in');
   }
   renderNav();
+  chatShowFab();
+  if (page.id === 'home') chatCheckInbox();
 }
 
 // ---------- shared pieces ----------
@@ -2450,7 +2456,7 @@ function siriCard() {
   const on = signedIn && localFlag('fp-siri');
   return `<div class="card" id="siri-card">
         <div class="card-head"><h2>🎙️ Siri</h2>${on ? '<span class="pill">Set up</span>' : ''}</div>
-        ${signedIn ? `<p class="hint">Say "Hey Siri, add to shopping", then what you need, like "milk and eggs". It goes straight on the household's shopping list. You make a Shortcut on your iPhone once to set it up.</p>
+        ${signedIn ? `<p class="hint">Say "Hey Siri, add to shopping", then what you need, like "milk and eggs". It goes straight on the household's shopping list. A second shortcut, "Tell Family Planner", takes whole sentences like "we need milk and Leo did the bins": the shopping, chores and spending happen straight away, and anything else waits in Ask for the next time you open the app. You make the shortcuts on your iPhone once to set them up.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <button class="btn ${on ? '' : 'primary'}" data-siri="setup">${on ? 'Set it up again' : 'Set up Hey Siri'}</button>
           ${on ? '<button class="btn ghost" data-siri="off">Turn off Siri key</button>' : ''}
@@ -2485,6 +2491,7 @@ async function siriAction(what) {
         <li>Add <strong>Speak Text</strong>, so Siri tells you what was added.</li>
         <li>Name the shortcut <strong>Add to shopping</strong>. Now say "Hey Siri, add to shopping".</li>
       </ol>
+      <p class="muted" style="margin-top:12px">For whole sentences, duplicate that shortcut, change the body field <strong>item</strong> to <strong>text</strong>, and name it <strong>Tell Family Planner</strong>. Then say "Hey Siri, tell Family Planner", and say what's happened, like "we need milk and Leo did the bins".</p>
       ${copyField('siri-url', 'Address', `${ACCOUNT.apiUrl}/shortcut/add`)}
       ${copyField('siri-key', 'Key', key)}
       <p class="hint" style="margin-top:10px">Keep the key private: anyone who has it can add things to your shopping list. It's only shown now. If it gets out, make a new one here or turn it off.</p>`,
@@ -2577,6 +2584,10 @@ async function renderSettings() {
         <div class="form-row" style="grid-template-columns:1fr 2fr">
           <label class="field">Monthly limit<input name="monthlyLimit" type="number" min="0" value="${esc(ai.monthlyLimit)}"></label>
           <p class="hint" style="align-self:center">${ai.usage && ai.usage.month ? `Used ${esc(ai.usage.count)} this month.` : 'Not used yet this month.'} 0 means no limit.</p>
+        </div>
+        <div class="form-row" style="grid-template-columns:1fr 2fr">
+          <label class="field">Chat messages a month<input name="chatLimit" type="number" min="0" value="${esc(ai.chatLimit ?? 300)}"></label>
+          <p class="hint" style="align-self:center">${ai.chatUsage && ai.chatUsage.month === new Date().toISOString().slice(0, 7) ? `${esc(ai.chatUsage.count)} sent this month.` : 'No chat messages this month.'} The chat has its own limit, so it can't use up the suggestions.</p>
         </div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn primary">Save</button>
@@ -3073,6 +3084,7 @@ async function renderKitchen() {
       <div><div class="k-clock" id="k-clock">${kitchenTime(now)}</div><div class="k-date">${now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div class="k-title">${esc(d.family.name || 'Family Planner')}${weather && weather.tempC !== null ? `<div class="k-weather">${weather.rain ? '🌧️' : weather.tempC < 12 ? '🧣' : weather.tempC >= 20 ? '☀️' : '⛅'} ${esc(weather.min)}° to ${esc(weather.max)}°${weather.rain ? ' · rain likely' : ''}</div>` : ''}</div>
       <div class="k-actions">
+        <button class="btn primary k-ask" data-ask-open>${icon('chat')} Ask</button>
         ${document.fullscreenEnabled ? `<button class="btn" data-k-full aria-label="Full screen">${icon('upload')} Full screen</button>` : ''}
         <button class="btn" data-nav="${look.start === 'kitchen' ? 'settings' : 'home'}">${icon('x')} ${look.start === 'kitchen' ? 'Settings' : 'Exit'}</button>
       </div>
@@ -3484,7 +3496,7 @@ document.addEventListener('submit', guard(async (e) => {
     // In case a browser still fills in the sign-in details here.
     if (/@/.test(body.model || '')) throw new Error("That's an email address, not a model name. Clear the Model box and try again.");
     if (body.apiKey && /@/.test(body.apiKey) && !/^sk-/.test(body.apiKey)) throw new Error("That's not an API key. Clear the API key box and paste your key.");
-    const send = { model: body.model, baseUrl: body.baseUrl, monthlyLimit: body.monthlyLimit };
+    const send = { model: body.model, baseUrl: body.baseUrl, monthlyLimit: body.monthlyLimit, chatLimit: body.chatLimit };
     if (body.apiKey) send.apiKey = body.apiKey;
     for (const k of Object.keys(send)) if (send[k] === undefined) delete send[k];
     await api('/ai/settings', { method: 'PUT', body: send });
@@ -3514,6 +3526,362 @@ const SHOPS = [
   ["Sainsbury's", (q) => `https://www.sainsburys.co.uk/gol-ui/SearchResults/${encodeURIComponent(q)}`],
   ['Ocado', (q) => `https://www.ocado.com/search?entry=${encodeURIComponent(q)}`],
 ];
+
+// ---------- Ask (the chat) ----------
+// A panel that slides up over any page. Type (or dictate, or send a photo) and it changes the
+// lists for you through /api/v1/chat, or answers from the family's data. Each change shows as
+// a card with Undo; deletes wait for Yes. The conversation stays on this device for 7 days
+// ('fp-chat' in localStorage) and never goes into the household's shared data.
+const CHAT_KEY = 'fp-chat';
+const CHAT_DAYS = 7;
+const chat = { open: false, busy: false, messages: [], queue: [], info: null, inbox: [] };
+(function chatLoad() {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHAT_KEY) || '{}') || {};
+    const since = Date.now() - CHAT_DAYS * 86400000;
+    chat.messages = (Array.isArray(v.messages) ? v.messages : []).filter((m) => m && new Date(m.at).getTime() > since);
+    chat.queue = Array.isArray(v.queue) ? v.queue : [];
+  } catch {}
+})();
+function chatSave() {
+  try { localStorage.setItem(CHAT_KEY, JSON.stringify({ messages: chat.messages.slice(-80), queue: chat.queue.slice(-20) })); } catch {}
+}
+const chatAllowed = () => !['kids'].includes(state.page);
+const chatId = () => Math.random().toString(36).slice(2, 10);
+
+// Ideas to tap when the box is empty, for the time of day.
+function chatStarters() {
+  const h = new Date().getHours();
+  const list = [];
+  if (h < 10) list.push("What's on today?", 'What should the kids wear?');
+  else if (h >= 15 && h < 19) list.push("What's for dinner?", 'Is anything going off?');
+  else if (h >= 19) list.push("What's on tomorrow?", 'Plan dinners for the week');
+  else list.push("What's on this week?", "What's for dinner?");
+  if ((state.shoppingCount || 0) < 3) list.push('Add to shopping: ');
+  else list.push("What's on the list?");
+  if (state.family?.children?.length) list.push(`${state.family.children[0].name} did their chores`);
+  list.push('How do I invite someone?');
+  return list.slice(0, 5);
+}
+
+function renderChatShell() {
+  if ($('#ask-panel')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <button id="ask-fab" class="ask-fab" type="button" data-ask-open aria-label="Ask" hidden>${icon('chat')}<span>Ask</span><i class="ask-dot" hidden></i></button>
+    <section id="ask-panel" class="ask-panel" role="dialog" aria-modal="false" aria-labelledby="ask-title" hidden>
+      <header class="ask-head">
+        <div><h2 id="ask-title">Ask</h2><div class="ask-mode muted small" id="ask-mode"></div></div>
+        <div class="ask-head-actions">
+          <button class="btn sm ghost" type="button" data-ask-clear>Clear</button>
+          <button class="btn sm ghost" type="button" data-ask-close aria-label="Close">${icon('x')}</button>
+        </div>
+      </header>
+      <div class="ask-log" id="ask-log" aria-live="polite"></div>
+      <form class="ask-form" id="ask-form" autocomplete="off">
+        <button class="ask-tool" type="button" data-ask-photo aria-label="Send a photo of a receipt or the fridge" title="Photo of a receipt or the fridge">${icon('camera')}</button>
+        <textarea id="ask-input" rows="1" maxlength="2000" placeholder="Ask or tell me…" enterkeyhint="send" aria-label="Message"></textarea>
+        <button class="ask-tool" type="button" data-ask-mic aria-label="Talk" title="Talk" hidden>${icon('mic')}</button>
+        <button class="ask-send" type="submit" aria-label="Send">${icon('send')}</button>
+      </form>
+      <p class="ask-hint" id="ask-hint"></p>
+    </section>`);
+  $('#ask-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const box = $('#ask-input');
+    const text = box.value;
+    box.value = '';
+    chatGrow();
+    chatSend(text);
+  });
+  $('#ask-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      $('#ask-form').requestSubmit();
+    }
+  });
+  $('#ask-input').addEventListener('input', chatGrow);
+  const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // On an iPhone home screen app the browser's own speech recognition is unreliable, so the
+  // keyboard's dictation mic is the way to talk there.
+  const standaloneIOS = /iPhone|iPad/.test(navigator.userAgent) && (navigator.standalone || matchMedia('(display-mode: standalone)').matches);
+  if (Speech && !standaloneIOS) $('[data-ask-mic]').hidden = false;
+  $('#ask-hint').textContent = matchMedia('(pointer: coarse)').matches ? 'To talk, tap the microphone on your keyboard.' : '';
+}
+function chatGrow() {
+  const box = $('#ask-input');
+  if (!box) return;
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight, 140) + 'px';
+}
+
+function chatShowFab() {
+  renderChatShell();
+  const fab = $('#ask-fab');
+  fab.hidden = !chatAllowed() || state.page === 'kitchen' || chat.open;
+  fab.querySelector('.ask-dot').hidden = !chat.inbox.length && !chat.queue.length;
+}
+
+async function chatOpen() {
+  renderChatShell();
+  if (!chatAllowed()) return;
+  chat.open = true;
+  setMore(false);
+  $('#ask-panel').hidden = false;
+  document.body.classList.add('ask-open');
+  chatShowFab();
+  chat.info = await api('/chat').catch(() => null);
+  chatRender();
+  chatGrow();
+  if (!matchMedia('(pointer: coarse)').matches) $('#ask-input').focus();
+  await chatFlush();
+}
+function chatClose() {
+  chat.open = false;
+  if ($('#ask-panel')) $('#ask-panel').hidden = true;
+  document.body.classList.remove('ask-open');
+  chatShowFab();
+}
+
+function chatMode() {
+  const i = chat.info;
+  if (!i) return '';
+  if (i.ai) return `✨ ${esc(i.model || 'AI')}${i.limit ? ` · ${esc(i.used)} of ${esc(i.limit)} this month` : ''}`;
+  return i.ready ? 'Using the app’s own rules (AI suggestions are off in Settings)' : 'Using the app’s own rules · <button class="linkish" data-nav="settings">Add an AI</button> for anything else';
+}
+
+function chatRender() {
+  if (!$('#ask-log')) return;
+  $('#ask-mode').innerHTML = chatMode();
+  const log = $('#ask-log');
+  if (!chat.messages.length) {
+    log.innerHTML = `<div class="ask-empty">
+      <p class="muted">Tell me what you need, like “we’re out of milk and eggs”, “Leo did the bins” or “Mia has a party Saturday at 2”. Or ask “what’s on today?”.</p>
+      <div class="chips">${chatStarters().map((s) => `<button class="chip" type="button" data-ask-say="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;
+  } else {
+    log.innerHTML = chat.messages.map(chatBubble).join('') + (chat.busy ? '<div class="ask-msg helper"><div class="ask-bubble ask-typing" aria-label="Thinking"><i></i><i></i><i></i></div></div>' : '');
+  }
+  log.scrollTop = log.scrollHeight;
+  chatShowFab();
+}
+
+function chatBubble(m) {
+  if (m.role === 'me') return `<div class="ask-msg me"><div class="ask-bubble">${m.siri ? '<span class="pill plain">Siri</span> ' : ''}${esc(m.text)}${m.queued ? '<div class="small muted">Waiting for the internet</div>' : ''}</div></div>`;
+  const changes = m.changes || [];
+  const live = changes.filter((c) => !c.undone && c.undo && c.undo.length);
+  return `<div class="ask-msg helper">
+    <div class="ask-bubble">${esc(m.text)}</div>
+    ${(m.pending || []).map((p, i) => `<div class="ask-card ask-confirm"><span class="emoji">❓</span><div class="grow">${esc(p.text)}</div>
+      ${p.answer ? `<span class="muted small">${p.answer === 'yes' ? 'Done' : 'Left as it was'}</span>` : `<button class="btn sm coral" type="button" data-ask-yes="${esc(m.id)}:${i}">Yes</button><button class="btn sm ghost" type="button" data-ask-no="${esc(m.id)}:${i}">No</button>`}</div>`).join('')}
+    ${changes.map((c, i) => `<div class="ask-card ${c.undone ? 'undone' : ''}"><span class="emoji">${esc(c.icon || '✓')}</span><div class="grow">${esc(c.text)}</div>
+      ${c.undone ? '<span class="muted small">Undone</span>' : c.undo && c.undo.length ? `<button class="btn sm ghost" type="button" data-ask-undo="${esc(m.id)}:${i}">Undo</button>` : ''}</div>`).join('')}
+    ${live.length > 1 ? `<div class="ask-row"><button class="btn sm ghost" type="button" data-ask-undo-all="${esc(m.id)}">Undo all ${live.length}</button></div>` : ''}
+    ${m.check ? chatCheck(m) : ''}
+    ${(m.failed || []).map((f) => `<div class="ask-card ask-failed"><span class="emoji">⚠️</span><div class="grow">${esc(f)}</div></div>`).join('')}
+    ${(m.offers || []).length || (m.links || []).length ? `<div class="chips ask-row">${(m.offers || []).map((o) => `<button class="chip" type="button" data-ask-say="${esc(o)}">${esc(o)}</button>`).join('')}${(m.links || []).map((l) => `<button class="chip" type="button" data-ask-nav="${esc(l.page)}">${esc(l.label)} →</button>`).join('')}</div>` : ''}
+    <div class="ask-by">${m.by === 'ai' ? `✨ AI${m.model ? ' · ' + esc(m.model) : ''}` : m.by === 'rules' ? 'Rules' : ''}</div>
+  </div>`;
+}
+
+// A photo's items to check before adding: untick anything the AI got wrong.
+function chatCheck(m) {
+  const c = m.check;
+  if (c.done) return `<div class="ask-card"><span class="emoji">✓</span><div class="grow">${esc(c.done)}</div></div>`;
+  return `<div class="ask-check" data-check="${esc(m.id)}">
+    <ul class="list">${c.items.map((it, i) => `<li class="row"><label class="grow"><input type="checkbox" data-check-item="${i}" checked> ${esc(it.name)}${it.quantity ? ` <span class="muted">${esc(it.quantity)}${it.unit && it.unit !== 'pcs' ? ' ' + esc(it.unit) : ''}</span>` : it.type ? ` <span class="muted">${esc(it.type)}${it.colour ? ', ' + esc(it.colour) : ''}</span>` : ''}</label></li>`).join('')}</ul>
+    <div class="ask-row">${c.choices.map((ch, i) => `<button class="btn sm ${i ? '' : 'primary'}" type="button" data-ask-check="${esc(m.id)}:${i}">${esc(ch.label)}</button>`).join(' ')}</div></div>`;
+}
+
+const chatFind = (id) => chat.messages.find((m) => m.id === id);
+// The undo list of the newest reply that still has something to undo ("undo that").
+function chatLastUndo() {
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const m = chat.messages[i];
+    const live = (m.changes || []).filter((c) => !c.undone && c.undo && c.undo.length);
+    if (live.length) return { m, list: live.flatMap((c) => c.undo), live };
+  }
+  return null;
+}
+
+async function chatSend(text, extra = {}) {
+  const msg = String(text || '').trim();
+  if ((!msg && !extra.image) || chat.busy) return;
+  const mine = { id: chatId(), role: 'me', text: extra.image ? (msg || '📷 Photo') : msg, at: new Date().toISOString(), ...(extra.siri ? { siri: true } : {}) };
+  chat.messages.push(mine);
+  chat.busy = true;
+  chatRender();
+  const history = chat.messages.slice(0, -1).slice(-8).map((m) => ({ role: m.role, text: m.text }));
+  const last = chatLastUndo();
+  try {
+    const weather = state.family?.location ? await todaysWeather().catch(() => null) : null;
+    const r = await api('/chat', { method: 'POST', body: {
+      message: msg, history,
+      ...(last ? { lastUndo: last.list } : {}),
+      ...(weather && weather.tempC !== null ? { weather: { tempC: weather.tempC, rain: weather.rain } } : {}),
+      ...(extra.image ? { image: extra.image, imageKind: extra.imageKind } : {}),
+      ...(extra.mode ? { mode: extra.mode } : {}),
+    } });
+    // "Undo that" used the last reply's undo list: show those as undone.
+    if (last && (r.changes || []).some((c) => c.icon === '↩️')) for (const c of last.live) c.undone = true;
+    if (r.queued) {
+      mine.queued = true;
+      chat.queue.push({ id: mine.id, text: msg, at: mine.at });
+    }
+    chat.messages.push({ id: chatId(), role: 'helper', at: new Date().toISOString(), text: r.reply, by: r.by, model: r.model, changes: r.changes, pending: r.pending, failed: r.failed, offers: r.offers, links: r.links, check: r.check });
+    if ((r.changes || []).length) chatChanged();
+  } catch (e) {
+    chat.messages.push({ id: chatId(), role: 'helper', at: new Date().toISOString(), text: e.message || 'Something went wrong. Try again?', failed: [] });
+  } finally {
+    chat.busy = false;
+    chatSave();
+    chatRender();
+    if (chat.open) chat.info = await api('/chat').catch(() => chat.info);
+    $('#ask-mode') && ($('#ask-mode').innerHTML = chatMode());
+  }
+}
+
+// The page underneath shows the change straight away (when no dialog is open over it).
+function chatChanged() {
+  if (!$('#dialog').open) refresh().catch(() => {});
+}
+
+// Messages kept for the AI while offline, and sentences said to Siri, get sent now.
+async function chatFlush() {
+  if (navigator.onLine === false || chat.busy) return;
+  if (chat.queue.length && chat.info?.ai) {
+    const list = chat.queue.splice(0);
+    chatSave();
+    for (const q of list) {
+      const m = chatFind(q.id);
+      if (m) m.queued = false;
+      await chatSend(q.text);
+    }
+  }
+  if (!window.FamilyPlannerAccount?.status().email) return;
+  const inbox = (await api('/chat/inbox').catch(() => ({ items: [] }))).items;
+  if (!inbox.length) return;
+  await api('/chat/inbox/done', { method: 'POST', body: { ids: inbox.map((m) => m.id) } }).catch(() => {});
+  chat.inbox = [];
+  for (const m of inbox) await chatSend(m.text, { siri: true });
+}
+async function chatCheckInbox() {
+  if (!window.FamilyPlannerAccount?.status().email || state.demo?.on) return;
+  chat.inbox = (await api('/chat/inbox').catch(() => ({ items: [] }))).items;
+  chatShowFab();
+}
+window.addEventListener('online', () => { if (chat.open) chatFlush(); else chatShowFab(); });
+
+async function chatUndo(changes) {
+  const r = await api('/chat/undo', { method: 'POST', body: { changes } });
+  if (r.kept) toast(`Undone, except ${plural(r.kept, 'thing')} someone has changed since`);
+  chatChanged();
+  return r;
+}
+
+async function chatPhoto() {
+  const ai = state.ai || await api('/ai/settings');
+  if (!ai.ready) return chatSend('read a photo', { mode: 'rules' }).then(() => toast('Reading photos needs an AI. Choose one in Settings.'));
+  const file = await pickFile('image/*');
+  if (!file) return;
+  const kind = await ask({ title: 'What is the photo of?', body: `<div class="choices">
+    <label><input type="radio" name="kind" value="food" checked> Food: a receipt, the fridge or shopping</label>
+    <label><input type="radio" name="kind" value="clothes"> Clothes</label></div>`, ok: 'Send' });
+  if (!kind) return;
+  chatSend('', { image: await photoToDataUrl(file), imageKind: kind.kind });
+}
+
+document.addEventListener('click', guard(async (e) => {
+  const t = e.target.closest('[data-ask-open],[data-ask-close],[data-ask-clear],[data-ask-say],[data-ask-nav],[data-ask-undo],[data-ask-undo-all],[data-ask-yes],[data-ask-no],[data-ask-check],[data-ask-photo],[data-ask-mic]');
+  if (!t) return;
+  if (t.matches('[data-ask-open]')) return chatOpen();
+  if (t.matches('[data-ask-close]')) return chatClose();
+  if (t.matches('[data-ask-clear]')) {
+    chat.messages = [];
+    chat.queue = [];
+    chatSave();
+    return chatRender();
+  }
+  if (t.matches('[data-ask-say]')) {
+    const s = t.dataset.askSay;
+    if (/:\s*$/.test(s)) {
+      $('#ask-input').value = s;
+      return $('#ask-input').focus();
+    }
+    return chatSend(s);
+  }
+  if (t.matches('[data-ask-nav]')) {
+    chatClose();
+    return go(t.dataset.askNav);
+  }
+  if (t.matches('[data-ask-undo]')) {
+    const [id, i] = t.dataset.askUndo.split(':');
+    const c = chatFind(id)?.changes?.[Number(i)];
+    if (!c || c.undone) return;
+    await chatUndo(c.undo);
+    c.undone = true;
+    chatSave();
+    return chatRender();
+  }
+  if (t.matches('[data-ask-undo-all]')) {
+    const m = chatFind(t.dataset.askUndoAll);
+    const live = (m?.changes || []).filter((c) => !c.undone && c.undo && c.undo.length);
+    await chatUndo(live.flatMap((c) => c.undo));
+    for (const c of live) c.undone = true;
+    chatSave();
+    return chatRender();
+  }
+  if (t.matches('[data-ask-yes],[data-ask-no]')) {
+    const yes = t.matches('[data-ask-yes]');
+    const [id, i] = (yes ? t.dataset.askYes : t.dataset.askNo).split(':');
+    const m = chatFind(id);
+    const p = m?.pending?.[Number(i)];
+    if (!p || p.answer) return;
+    if (yes) {
+      const r = await api('/chat/confirm', { method: 'POST', body: { actions: [p.action] } });
+      m.changes = [...(m.changes || []), ...r.changes];
+      m.failed = [...(m.failed || []), ...r.failed];
+      chatChanged();
+    }
+    p.answer = yes ? 'yes' : 'no';
+    chatSave();
+    return chatRender();
+  }
+  if (t.matches('[data-ask-check]')) {
+    const [id, i] = t.dataset.askCheck.split(':');
+    const m = chatFind(id);
+    const choice = m?.check?.choices?.[Number(i)];
+    if (!choice) return;
+    const box = t.closest('.ask-check');
+    const items = m.check.items.filter((_, j) => box.querySelector(`[data-check-item="${j}"]`)?.checked);
+    if (!items.length) return toast('Tick at least one thing');
+    const args = choice.action === 'clothes.add' ? { childId: choice.childId, items } : { items: items.map((x) => ({ ...x, kind: 'food' })) };
+    const r = await api('/chat/confirm', { method: 'POST', body: { actions: [{ name: choice.action, args }] } });
+    m.changes = [...(m.changes || []), ...r.changes];
+    m.failed = [...(m.failed || []), ...r.failed];
+    m.check.done = r.changes.length ? `${choice.label}: ${plural(items.length, 'thing')}` : 'Not added';
+    chatChanged();
+    chatSave();
+    return chatRender();
+  }
+  if (t.matches('[data-ask-photo]')) return chatPhoto();
+  if (t.matches('[data-ask-mic]')) {
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new Speech();
+    rec.lang = 'en-GB';
+    rec.interimResults = false;
+    t.classList.add('listening');
+    rec.onresult = (ev) => {
+      const said = ev.results[0][0].transcript;
+      $('#ask-input').value = ($('#ask-input').value + ' ' + said).trim();
+      chatGrow();
+    };
+    rec.onend = () => t.classList.remove('listening');
+    rec.onerror = () => { t.classList.remove('listening'); toast('I couldn’t hear that. Try the keyboard’s microphone.'); };
+    rec.start();
+  }
+}));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && chat.open && !$('#dialog').open) chatClose(); });
+// On a phone, tapping the dimmed page above the panel closes it.
+document.addEventListener('click', (e) => { if (chat.open && e.target === document.body) chatClose(); });
 
 // ---------- start ----------
 (async () => {

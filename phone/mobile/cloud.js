@@ -58,7 +58,7 @@ export function shareable(data) {
   delete out.demo;
   delete out.demoSaved;
   if (out.ai) {
-    const { apiKey, keyFor, usage, ...rest } = out.ai;
+    const { apiKey, keyFor, usage, chatUsage, ...rest } = out.ai;
     out.ai = rest;
   }
   return out;
@@ -67,8 +67,8 @@ export function shareable(data) {
 // Take the account's copy, keeping this device's AI key and usage.
 export function merged(remote, local) {
   const out = { ...remote };
-  if (remote.ai || local.ai) out.ai = { ...(local.ai || {}), ...(remote.ai || {}), apiKey: local.ai?.apiKey || '', keyFor: local.ai?.keyFor, usage: local.ai?.usage };
-  for (const k of ['keyFor', 'usage']) if (out.ai && out.ai[k] === undefined) delete out.ai[k];
+  if (remote.ai || local.ai) out.ai = { ...(local.ai || {}), ...(remote.ai || {}), apiKey: local.ai?.apiKey || '', keyFor: local.ai?.keyFor, usage: local.ai?.usage, chatUsage: local.ai?.chatUsage };
+  for (const k of ['keyFor', 'usage', 'chatUsage']) if (out.ai && out.ai[k] === undefined) delete out.ai[k];
   return out;
 }
 

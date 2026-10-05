@@ -17,6 +17,7 @@ const ai = require('./modules/ai');
 const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
 const demo = require('./modules/demo');
+const chat = require('./modules/chat');
 const { nodeFetchPage } = require('./modules/food/fetch-page');
 
 const PUBLIC = path.join(__dirname, 'public');
@@ -66,6 +67,12 @@ function createApp(store, options = {}) {
   const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi, packing: packingApi });
   const aiApi = ai.register(router, store, { familySummary: fam.summary, food: foodApi, suggesters });
 
+  chat.register(router, store, {
+    family: fam.summary,
+    apis: { food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi, calendar: calendarApi, packing: packingApi, money: moneyApi },
+    ai: aiApi.chat,
+  });
+
   const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats(), choreSummary = choresApi.summary(), calendarSummary = calendarApi.summary()) =>
     reminders({ food, clothes: clothesStats, shopping: shoppingApi.count(), chores: choreSummary, calendar: calendarSummary, swaps: clothesApi.swaps(), money: moneyApi.summary(), trips: packingApi.upcoming() });
 
@@ -100,7 +107,7 @@ function createApp(store, options = {}) {
     const source = demoApi.inDemo() ? store.data.demoSaved || {} : store.data;
     for (const k of SECTIONS) if (source[k] !== undefined) data[k] = source[k];
     if (store.data.ai) {
-      const { apiKey, keyFor, usage, suggestCache, ...rest } = store.data.ai;
+      const { apiKey, keyFor, usage, chatUsage, suggestCache, ...rest } = store.data.ai;
       data.ai = rest;
     }
     return { app: 'family-planner', version: 1, exportedAt: new Date().toISOString(), data };
@@ -126,9 +133,9 @@ function createApp(store, options = {}) {
     for (const k of SECTIONS) if (data[k] !== undefined) store.data[k] = data[k];
     if (data.ai) {
       // This device's AI key (and which server it's for) and its usage count are never taken from a file.
-      const { apiKey, keyFor, usage, ...ai } = data.ai;
+      const { apiKey, keyFor, usage, chatUsage, ...ai } = data.ai;
       const mine = store.data.ai || {};
-      store.data.ai = { ...mine, ...ai, apiKey: mine.apiKey || '', keyFor: mine.keyFor, usage: mine.usage };
+      store.data.ai = { ...mine, ...ai, apiKey: mine.apiKey || '', keyFor: mine.keyFor, usage: mine.usage, chatUsage: mine.chatUsage };
     }
     store.save();
     return { ok: true };

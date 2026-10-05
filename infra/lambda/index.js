@@ -9,7 +9,7 @@
 //   GET  /push/key, POST /push/subscribe|unsubscribe|schedule|test  reminders on a home screen
 //        app (Web Push), sent by the same function every 15 minutes (EventBridge)
 //   POST /shortcut/key, /shortcut/key/revoke  a key for the "Hey Siri" Shortcut, which calls
-//   POST /shortcut/add { key, item }  without signing in (its own route in cloud.yaml)
+//   POST /shortcut/add { key, item } or { key, text }  without signing in (its own route in cloud.yaml)
 //   POST /fetch-page { url }  opens a recipe page for "Recipe from a link" (a browser can't, because
 //        of CORS); public addresses only, 2 MB and 10 seconds at most, 40 a day each
 // Each person signs in with their own email. Someone who hasn't joined a household has
@@ -21,6 +21,7 @@ const crypto = require('crypto');
 const dns = require('dns');
 // Shared with the self-hosted server; infra/build.mjs copies it in here for the template.
 const { makeFetchPage } = require('../../web/modules/food/fetch-page'); // @inline
+const { parse: parseChat, clauses: chatClauses } = require('../../web/modules/chat/parse'); // @inline
 const s3 = new S3Client({});
 const cognito = new CognitoIdentityProviderClient({});
 const sns = new SNSClient({});
@@ -487,15 +488,17 @@ async function shortcutAdd(body) {
   if (!/^[\w-]{43}$/.test(key)) return answer(403, WRONG_KEY);
   const lookup = await getJson(lookupKey(sha256(key)));
   if (!lookup.value) return answer(403, WRONG_KEY);
+  const said = typeof (body && body.text) === 'string' ? body.text.trim().slice(0, 400) : null;
   const item = String((body && body.item) || '');
   const names = item.length <= 400 ? splitItems(item) : [];
-  if (!names.length) return answer(400, "I didn't catch what to add. Try again.");
+  if (said === null ? !names.length : !said) return answer(400, "I didn't catch what to add. Try again.");
   const today = new Date().toISOString().slice(0, 10);
   const count = lookup.value.day === today ? lookup.value.count || 0 : 0;
   if (count >= SIRI_PER_DAY) return answer(429, "That's a lot for one day. Add the rest in the app.");
   await putJson(lookupKey(sha256(key)), { ...lookup.value, day: today, count: count + 1 });
   const { sub } = lookup.value;
   const owner = (await getJson(shortcutKey(sub))).value || {};
+  if (said !== null) return shortcutSay(said, sub, owner, answer);
   let added = [];
   let already = [];
   await update(dataKey(await householdOf(sub)), (data) => {
@@ -522,6 +525,85 @@ async function shortcutAdd(body) {
     already.length && `${listed(already)} ${already.length > 1 ? 'were' : 'was'} already on it`,
   ].filter(Boolean).join('. ');
   return answer(200, message, { added });
+}
+
+// "Hey Siri, tell Family Planner we need milk and Leo did the bins": a whole sentence, { key, text }.
+// The chat's rules (web/modules/chat/parse.js, copied in by infra/build.mjs) do what they can here:
+// shopping, chores done and spending. Anything else (a question, a Diary event, or something the
+// rules don't follow) waits in the household's chat inbox for the person's own app, which hands it
+// to their chat (and their AI, whose key never leaves their phone) next time it opens.
+async function shortcutSay(text, sub, owner, answer) {
+  const lines = [];
+  let later = false;
+  const now = new Date().toISOString();
+  await update(dataKey(await householdOf(sub)), (data) => {
+    lines.length = 0;
+    later = false;
+    const next = data || {};
+    next.shopping ||= { items: [] };
+    next.shopping.items ||= [];
+    const family = next.family || {};
+    const children = Array.isArray(family.children) ? family.children : [];
+    const chores = next.chores && Array.isArray(next.chores.list) ? next.chores : null;
+    const people = [...(chores && Array.isArray(chores.adults) ? chores.adults : []), ...children];
+    const ctx = {
+      today: now.slice(0, 10),
+      people,
+      children,
+      shopping: next.shopping.items,
+      pantry: next.food && Array.isArray(next.food.pantry) ? next.food.pantry : [],
+      chores: chores ? chores.list : [],
+      events: next.calendar && Array.isArray(next.calendar.events) ? next.calendar.events : [],
+    };
+    // One part of the sentence at a time, so only the parts not done here go to the app.
+    const rest = [];
+    const doable = new Set(['shopping.add', 'chores.done', 'money.spend']);
+    const actions = [];
+    for (const part of chatClauses(text, ctx)) {
+      const r = parseChat(part, ctx);
+      if (r.actions.length && !r.unknown.length && r.actions.every((a) => doable.has(a.name) && (a.name !== 'chores.done' || chores) && (a.name !== 'money.spend' || (a.args.amount > 0 && a.args.amount <= 5000)))) actions.push(...r.actions);
+      else rest.push(part);
+    }
+    for (const a of actions) {
+      if (a.name === 'shopping.add') {
+        const have = new Set(next.shopping.items.filter((i) => !i.done).map((i) => sameName(i.name)));
+        const added = [];
+        for (const it of a.args.items.slice(0, 20)) {
+          if (have.has(sameName(it.name))) continue;
+          have.add(sameName(it.name));
+          next.shopping.items.push({ id: crypto.randomUUID(), addedAt: now, name: it.name, kind: it.kind || 'food', done: false, ...(it.quantity ? { quantity: it.quantity } : {}), ...(it.unit ? { unit: it.unit } : {}), ...(owner.email ? { addedBy: owner.email } : {}) });
+          added.push(it.name);
+        }
+        lines.push(added.length ? `Added ${listed(added)} to the shopping list` : `${listed(a.args.items.map((i) => i.name))} ${a.args.items.length > 1 ? 'were' : 'was'} already on the list`);
+      } else if (a.name === 'chores.done' && chores) {
+        const c = chores.list.find((x) => x.id === a.args.choreId);
+        const by = people.find((p) => p.id === a.args.by);
+        if (!c) continue;
+        // The same shape as a tick in the app (web/modules/chores/index.js).
+        chores.log ||= [];
+        chores.log.push({ id: crypto.randomUUID(), choreId: c.id, name: c.name, by: by ? by.id : c.who || null, effort: c.effort || 1, at: now, before: c.lastDone || null, ...(owner.email ? { tickedBy: owner.email } : {}) });
+        if (chores.log.length > 600) chores.log.splice(0, chores.log.length - 600);
+        c.lastDone = now;
+        delete c.snoozedUntil;
+        lines.push(`${by ? by.name + ' did' : 'Done:'} ${c.name.charAt(0).toLowerCase()}${c.name.slice(1)}`);
+      } else if (a.name === 'money.spend' && a.args.amount > 0 && a.args.amount <= 5000) {
+        next.shopping.spending ||= [];
+        const amount = Math.round(a.args.amount * 100) / 100;
+        next.shopping.spending.push({ id: crypto.randomUUID(), amount, date: now.slice(0, 10), shop: a.args.shop ? String(a.args.shop).slice(0, 40) : null, ...(a.args.category && a.args.category !== 'food' ? { category: a.args.category } : {}), ...(owner.email ? { addedBy: owner.email } : {}) });
+        lines.push(`Recorded £${amount.toFixed(2)}${a.args.shop ? ' at ' + a.args.shop : ''}`);
+      }
+    }
+    if (rest.length && owner.email) {
+      next.chat ||= {};
+      next.chat.inbox = (Array.isArray(next.chat.inbox) ? next.chat.inbox : []).slice(-49);
+      next.chat.inbox.push({ id: crypto.randomUUID(), text: rest.join('. '), at: now, by: owner.email });
+      later = true;
+    }
+    return lines.length || later ? next : undefined;
+  });
+  if (!lines.length && !later) return answer(200, "I couldn't do that from Siri. Try it in the app's chat.", { done: [] });
+  const message = [lines.join('. '), later && (lines.length ? "I'll do the rest when you next open the app" : "I'll do that when you next open the app")].filter(Boolean).join('. ');
+  return answer(200, message, { done: lines, later });
 }
 
 exports.handler = async (event) => {

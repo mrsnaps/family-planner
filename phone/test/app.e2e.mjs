@@ -521,6 +521,53 @@ try {
     ok('the phone bar has Home, three tabs and More, and the three can be changed');
     await ctx.close();
   }
+  // 12. Ask: the chat, here without an AI, so the app's own rules answer.
+  {
+    const { ctx, page, api, errors } = await open();
+    await api('/family/children', 'POST', { name: 'Leo', birthDate: '2018-05-01', clothingSize: '7-8Y' });
+    await api('/chores', 'POST', { name: 'Put the bins out', every: 7, effort: 2 });
+    await page.reload();
+    await page.waitForSelector('#ask-fab:not([hidden])');
+    await page.click('#ask-fab');
+    await page.waitForSelector('#ask-panel:not([hidden]) .ask-empty');
+    await page.fill('#ask-input', "we're out of milk and eggs and Leo did the bins");
+    await page.press('#ask-input', 'Enter');
+    await page.waitForSelector('.ask-card >> text=Added Milk and Eggs to the shopping list');
+    await page.waitForSelector('.ask-card >> text=Leo did put the bins out');
+    assert.equal((await api('/shopping')).data.items.length, 2);
+    await page.screenshot({ path: `${SHOTS}/ask.png` });
+    // Undo just the chore.
+    await page.click('.ask-card:has-text("Leo did") [data-ask-undo]');
+    await page.waitForSelector('.ask-card.undone');
+    assert.equal((await api('/chores')).data.totals.find((t) => t.name === 'Leo').points, 0);
+    // Deleting asks first.
+    await page.fill('#ask-input', 'remove eggs from the list');
+    await page.press('#ask-input', 'Enter');
+    await page.waitForSelector('[data-ask-yes]');
+    assert.equal((await api('/shopping')).data.items.length, 2);
+    await page.click('[data-ask-yes]');
+    await page.waitForSelector('.ask-card >> text=Took Eggs off the list');
+    assert.equal((await api('/shopping')).data.items.length, 1);
+    // The conversation stays on this phone after closing and reopening the app.
+    await page.click('[data-ask-close]');
+    await page.reload();
+    await page.click('#ask-fab');
+    await page.waitForSelector('.ask-card >> text=Took Eggs off the list');
+    await page.click('[data-ask-close]');
+    // Not in the Kids' view; a big Ask button on the kitchen screen.
+    await page.evaluate(() => { location.hash = '#kids'; });
+    await page.reload();
+    await page.waitForSelector('body.kids-mode');
+    assert.equal(await page.locator('#ask-fab:visible').count(), 0);
+    await page.evaluate(() => { location.hash = '#kitchen'; });
+    await page.reload();
+    await page.waitForSelector('.k-ask');
+    await page.click('.k-ask');
+    await page.waitForSelector('#ask-panel:not([hidden])');
+    assert.deepEqual(errors, []);
+    ok('Ask adds, ticks off chores, undoes, asks before deleting, and remembers the chat on the phone');
+    await ctx.close();
+  }
   console.log('\nAll phone app checks passed.');
 } finally {
   await browser.close();
