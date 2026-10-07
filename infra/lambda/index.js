@@ -1,7 +1,10 @@
 // Household data API behind Cognito sign-in. Deployed inline by infra/cloud.yaml: run
 // `node infra/build.mjs` after editing to copy this file into the template.
 //   GET  /data       the household's saved data       PUT /data { data, baseRev }
-//   GET  /rev        just the saved version, for a cheap "anything new?" check
+//   GET  /rev        just the saved versions, for a cheap "anything new?" check
+//   GET  /private    this person's own data (personal bills)  PUT /private { data, baseRev }
+//        Kept in their own file, never the household's, so nobody else in the household can
+//        read it. PUT /data drops any personal bill sent with the household's data.
 //   GET  /household  who's in the household           POST /invite -> { code }
 //   POST /join { code }  join another household       POST /leave
 //   POST /delete-account  removes the login and everything only this person can see
@@ -73,6 +76,22 @@ const pagesKey = (sub) => `members/${sub}.pages.json`;
 const pushKey = (sub) => `members/${sub}.push.json`;
 const shortcutKey = (sub) => `members/${sub}.shortcut.json`;
 const lookupKey = (hash) => `shortcuts/${hash}.json`;
+const privateKey = (sub) => `members/${sub}.private.json`;
+
+// The household's file never holds anyone's personal bills, even from an app that sends them.
+function withoutPersonal(data) {
+  const items = data.bills && Array.isArray(data.bills.items) ? data.bills.items : null;
+  if (!items || !items.some((b) => b && b.personal)) return data;
+  return { ...data, bills: { ...data.bills, items: items.filter((b) => !(b && b.personal)) } };
+}
+async function headRev(Key) {
+  try {
+    return (await s3.send(new HeadObjectCommand({ Bucket, Key }))).ETag;
+  } catch (e) {
+    if (e.name === 'NotFound' || (e.$metadata && e.$metadata.httpStatusCode === 404)) return null;
+    throw e;
+  }
+}
 
 async function householdOf(sub) {
   const m = await getJson(memberKey(sub));
@@ -95,12 +114,26 @@ const routes = {
     return { data: r.value, rev: r.rev, savedAt: r.savedAt };
   },
   async 'GET /rev'(me) {
+    const [rev, privateRev] = await Promise.all([headRev(dataKey(await householdOf(me.sub))), headRev(privateKey(me.sub))]);
+    return { rev, privateRev };
+  },
+  async 'GET /private'(me) {
+    const r = await getJson(privateKey(me.sub));
+    return { data: r.value, rev: r.rev };
+  },
+  async 'PUT /private'(me, body) {
+    const d = body && body.data;
+    if (!d || typeof d !== 'object' || Array.isArray(d) || !Array.isArray(d.bills) || d.bills.some((b) => !b || typeof b !== 'object' || Array.isArray(b))) throw fail(400, 'Nothing to save');
+    const data = { bills: d.bills.map((b) => ({ ...b, personal: true })) };
+    const condition = body.baseRev ? { IfMatch: body.baseRev } : { IfNoneMatch: '*' };
     try {
-      const o = await s3.send(new HeadObjectCommand({ Bucket, Key: dataKey(await householdOf(me.sub)) }));
+      const o = await putJson(privateKey(me.sub), data, condition);
       return { rev: o.ETag };
     } catch (e) {
-      if (e.name === 'NotFound' || (e.$metadata && e.$metadata.httpStatusCode === 404)) return { rev: null };
-      throw e;
+      const status = e.$metadata && e.$metadata.httpStatusCode;
+      if (status !== 412 && status !== 409) throw e;
+      const r = await getJson(privateKey(me.sub));
+      return Object.assign(reply(409, { error: 'Changed on another device', data: r.value, rev: r.rev }), { raw: true });
     }
   },
   async 'PUT /data'(me, body) {
@@ -108,7 +141,7 @@ const routes = {
     const Key = dataKey(await householdOf(me.sub));
     const condition = body.baseRev ? { IfMatch: body.baseRev } : { IfNoneMatch: '*' };
     try {
-      const o = await putJson(Key, body.data, condition);
+      const o = await putJson(Key, withoutPersonal(body.data), condition);
       return { rev: o.ETag };
     } catch (e) {
       const status = e.$metadata && e.$metadata.httpStatusCode;
@@ -261,6 +294,7 @@ routes['POST /delete-account'] = async (me) => {
   const hid = await householdOf(me.sub);
   for (const h of new Set([hid, me.sub])) await forgetHousehold(h, me);
   await purge(memberKey(me.sub));
+  await purge(privateKey(me.sub));
   await purge(feedbackKey(me.sub));
   await purge(pagesKey(me.sub));
   await purge(pushKey(me.sub));

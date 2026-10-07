@@ -118,6 +118,7 @@ const ICONS = {
   upload: '<path d="M12 16V5M7 10l5-5 5 5M4 20h16"/>',
   broom: '<path d="M14 3 10 11M6.5 11h7l3.5 10H3z"/><path d="M8 21l1-4M12 21v-4"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+  bill: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
   share: '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/>',
 };
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -178,13 +179,14 @@ const PAGES = [
   { id: 'shopping', label: 'Shop', icon: 'cart', title: 'Shopping list', render: renderShopping },
   { id: 'chores', label: 'Chores', icon: 'broom', title: 'Chores', render: renderChores },
   { id: 'calendar', label: 'Diary', icon: 'calendar', title: 'Calendar', render: renderCalendar },
+  { id: 'bills', label: 'Bills', icon: 'bill', title: 'Bills', render: renderBills },
   { id: 'family', label: 'Family', icon: 'people', title: 'Family', render: renderFamily },
   { id: 'settings', label: 'Settings', icon: 'gear', title: 'Settings', render: renderSettings },
   { id: 'kitchen', label: 'Kitchen', icon: 'home', title: 'Kitchen screen', render: renderKitchen, hidden: true },
   { id: 'kids', label: 'Kids', icon: 'people', title: "Kids' view", render: renderKids, hidden: true },
 ];
 // Tools that can be hidden in Settings > Customise (Home, Family and Settings always show).
-const TOOLS = ['food', 'clothes', 'shopping', 'chores', 'calendar'];
+const TOOLS = ['food', 'clothes', 'shopping', 'chores', 'calendar', 'bills'];
 
 // ---------- look and layout (each device chooses its own) ----------
 const LOOK_DEFAULT = {
@@ -521,6 +523,8 @@ async function renderHome() {
     ${choresHomeCard(d.chores)}
 
     ${calendarHomeCard(d.calendar, d.trips)}
+
+    ${billsHomeCard(d.bills)}
 
     <div class="card-head" style="margin:26px 0 12px" data-tool="clothes"><h2>Kids' clothes</h2><button class="btn sm" data-nav="clothes">Open wardrobes</button></div>
     ${d.clothes.length ? `<div class="grid g2" data-tool="clothes">${d.clothes.map((s, i) => kidCard(s, i)).join('')}</div>`
@@ -1864,6 +1868,7 @@ document.addEventListener('click', guard(async (e) => {
   if (d.aiRefresh) {
     if (d.aiRefresh === 'shopping') return aiShopping(true);
     if (d.aiRefresh === 'chores') return aiChores(true);
+    if (d.aiRefresh === 'bills') return aiBills(true);
     await api('/ai/suggest/' + d.aiRefresh, { method: 'POST', body: { refresh: true } }).catch((e) => toast(e.message));
     return refresh();
   }
@@ -2742,6 +2747,174 @@ document.addEventListener('submit', guard(async (e) => {
   toast(state.family.name ? `Saved: ${state.family.name}` : 'Name cleared');
 }));
 
+// ---------- bills ----------
+// What goes out and when. Family bills are shared with the household; personal ones are only
+// on your devices and in your own account (never in the household's copy).
+const billWhen = (b) => b.done ? 'Paid' : b.days < 0 ? `${plural(-b.days, 'day')} late` : b.days === 0 ? 'Due today' : b.days === 1 ? 'Due tomorrow' : `Due ${fmtShort(b.next)}`;
+const billBadge = (b) => b.personal ? '<span class="pill plain" title="Only you can see this">🔒 Personal</span>' : '<span class="pill plain">👪 Family</span>';
+const billsShared = () => Boolean(ACCOUNT?.status().signedIn);
+
+function billsHomeCard(bills) {
+  if (!bills || !bills.upcoming.length) return '';
+  return `<div class="card" style="margin-top:16px" data-tool="bills"><div class="card-head"><h2>🧾 Bills coming up</h2><button class="btn ghost sm" data-nav="bills">${moneyP(bills.totals.leftThisMonth)} left this month</button></div>
+    <ul class="list">${bills.upcoming.slice(0, 4).map((u) => `<li class="row"><span class="emoji">${esc(u.emoji)}</span>
+      <div class="grow"><div class="title">${esc(u.name)} · ${moneyP(u.amount)}${u.personal ? ' 🔒' : ''}</div><div class="sub">${esc(u.days < 0 ? 'Overdue' : u.days === 0 ? 'Today' : u.days === 1 ? 'Tomorrow' : fmtShort(u.date))}${u.auto ? ' · pays itself' : ''}</div></div></li>`).join('')}</ul></div>`;
+}
+
+function billTipsCard(tips, ai = null) {
+  return `<div class="card" id="bills-tips">
+    <div class="card-head"><h2>💡 Tips</h2>${aiByline(ai)}</div>
+    <div id="bills-ai-status">${ai && !ai.error ? `<p class="hint">✨ From ${esc(ai.by)}. <button class="btn ghost sm" data-ai-refresh="bills">Ask again</button></p>` : aiNote(ai, 'tips')}</div>
+    ${tips.length ? `<ul class="list">${tips.map((t) => `<li class="row"><div class="grow"><div class="sub" style="color:var(--text)">${esc(t.text)}</div></div>
+      <button class="icon-btn" data-bill-tip="${esc(t.key)}" aria-label="Not now" title="Not now">${icon('x')}</button></li>`).join('')}</ul>`
+      : '<p class="hint">Nothing to point out. Tips show up when a deal is ending, a bill goes up or subscriptions add up.</p>'}
+  </div>`;
+}
+
+const billVisibility = (personal = false, locked = false) => `<div class="field" style="margin-top:10px">Who can see it
+  <div class="chips" style="margin-top:4px">
+    <label class="chip"><input type="radio" name="personal" value="" ${personal ? '' : 'checked'} ${locked ? 'disabled' : ''} style="width:auto"> 👪 The family</label>
+    <label class="chip"><input type="radio" name="personal" value="1" ${personal ? 'checked' : ''} ${locked ? 'disabled' : ''} style="width:auto"> 🔒 Just me</label>
+  </div></div>`;
+
+async function renderBills() {
+  const b = await api('/bills');
+  state.bills = b;
+  const view = state.billsView || 'all';
+  const shown = b.bills.filter((x) => view === 'all' || (view === 'personal') === Boolean(x.personal));
+  $('#page-sub').textContent = b.bills.length ? `About ${moneyP(b.totals.all)} a month` : 'Family and personal bills in one place';
+  const me = ACCOUNT?.status().email;
+  const signedIn = billsShared();
+  $('#page').innerHTML = `
+    <div class="grid g3">
+      <div class="card kpi tone-blue"><span class="lbl">👪 Family bills</span><span class="num">${moneyP(b.totals.family)}</span><span class="lbl">a month, shared with the household</span></div>
+      <div class="card kpi tone-green"><span class="lbl">🔒 Personal bills</span><span class="num">${moneyP(b.totals.personal)}</span><span class="lbl">a month, only you see these</span></div>
+      <div class="card kpi ${b.totals.overdue ? 'tone-coral' : 'tone-warn'}"><span class="lbl">📅 Still to go out</span><span class="num">${moneyP(b.totals.leftThisMonth)}</span><span class="lbl">this month${b.totals.overdue ? `, ${plural(b.totals.overdue, 'bill')} overdue` : ''}</span></div>
+    </div>
+    <div class="split" style="margin-top:16px">
+      <div class="stack">
+        <div class="card" id="bills-upcoming">
+          <div class="card-head"><h2>Coming up</h2><span class="muted small">Next 30 days</span></div>
+          ${b.upcoming.length ? `<ul class="list">${b.upcoming.map((u) => `<li class="row ${u.days < 0 ? 'late' : ''}">
+            <span class="emoji">${esc(u.emoji)}</span>
+            <div class="grow"><div class="title">${esc(u.name)} · ${moneyP(u.amount)}${u.personal ? ' <span title="Only you can see this">🔒</span>' : ''}</div>
+              <div class="sub">${esc(u.days < 0 ? `${plural(-u.days, 'day')} overdue` : u.days === 0 ? 'Today' : u.days === 1 ? 'Tomorrow' : dayLabel(u.date, b.today))}${u.auto ? ' · pays itself' : ''}</div></div>
+            ${u.auto ? '' : `<button class="btn sm" data-bill-paid="${esc(u.billId)}">${icon('check')} Paid</button>`}
+          </li>`).join('')}</ul>` : emptyState('🧾', 'Nothing due in the next 30 days. Add your bills and the app reminds you before each one.')}
+        </div>
+        ${billTipsCard(b.tips)}
+        ${b.byCategory.length ? `<div class="card"><div class="card-head"><h2>Where it goes</h2><span class="muted small">a month</span></div>
+          <div class="chips">${b.byCategory.map((c) => `<span class="pill plain">${esc(c.emoji)} ${esc(c.label)} ${moneyP(c.total)}</span>`).join('')}</div></div>` : ''}
+      </div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><h2>Add a bill</h2></div>
+          <form id="bill-form" class="stack">
+            <div class="form-row" style="grid-template-columns:2fr 1fr">
+              <label class="field">What<input name="name" placeholder="e.g. Council tax" required maxlength="60"></label>
+              <label class="field">Amount<input name="amount" inputmode="decimal" placeholder="£" required></label>
+            </div>
+            <div class="form-row" style="grid-template-columns:1fr 1fr">
+              <label class="field">How often<select name="every">${b.every.map((e) => `<option value="${esc(e.key)}" ${e.key === 'month' ? 'selected' : ''}>${esc(e.label)}</option>`).join('')}</select></label>
+              <label class="field">Next due<input name="due" type="date" value="${esc(b.today)}" required></label>
+            </div>
+            <label class="field">Kind<select name="category">${b.categories.map((c) => `<option value="${esc(c.key)}">${esc(c.emoji)} ${esc(c.label)}</option>`).join('')}</select></label>
+            <label class="field"><span><input type="checkbox" name="auto" style="width:auto"> Pays itself (direct debit or standing order)</span></label>
+            ${billVisibility(false)}
+            <p class="hint">${signedIn ? 'Family bills are shared with everyone in your household. Personal ones are saved in your own account only, so nobody else can see them.' : 'Bills stay on this device. Once you sign in, family bills are shared with your household and personal ones stay yours.'}</p>
+            <button class="btn primary">${icon('plus')} Add bill</button>
+          </form>
+        </div>
+        ${b.bills.length ? `<div class="card" id="bills-all">
+          <div class="card-head"><h2>All bills</h2>
+            <div class="seg">${[['all', 'All'], ['family', '👪 Family'], ['personal', '🔒 Personal']].map(([k, l]) => `<button data-bills-view="${k}" class="${view === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+          ${shown.length ? `<ul class="list">${shown.map((x) => {
+            const paid = (x.paid || []).at(-1);
+            return `<li class="row ${x.done ? 'done' : ''}">
+            <span class="emoji">${esc(x.emoji)}</span>
+            <div class="grow"><div class="title">${esc(x.name)} · ${moneyP(x.amount)} ${billBadge(x)}</div>
+              <div class="sub">${esc(b.every.find((e) => e.key === x.every)?.label || '')} · ${esc(billWhen(x))}${x.auto ? ' · pays itself' : ''}${x.ends ? ` · deal ends ${esc(fmtShort(x.ends))}` : ''}${!x.personal && x.owner && x.owner !== me ? ` · added by ${esc(personName(x.owner))}` : ''}${paid ? ` · paid ${esc(fmtShort(paid.date))}` : ''}${paid && paid.date === b.today ? ` <button class="btn ghost sm" data-bill-undo="${esc(x.id)}">Undo</button>` : ''}</div></div>
+            <button class="icon-btn" data-bill-edit="${esc(x.id)}" aria-label="Change ${esc(x.name)}">${icon('edit')}</button>
+            <button class="icon-btn danger" data-bill-del="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">${icon('trash')}</button></li>`;
+          }).join('')}</ul>` : `<p class="hint">${view === 'personal' ? 'No personal bills yet. Choose "Just me" when adding one.' : 'No family bills yet.'}</p>`}
+        </div>` : ''}
+      </div>
+    </div>`;
+  if (state.ai?.suggestions || (state.ai = await api('/ai/settings')).suggestions) aiBills();
+}
+
+async function aiBills(refresh = false) {
+  if (!state.bills.bills.length) return;
+  const status = $('#bills-ai-status');
+  if (status) status.innerHTML = '<p class="hint">✨ Asking the AI for tips…</p>';
+  const r = await aiSuggest('bills', {}, { refresh });
+  if (!r || !$('#bills-tips')) return;
+  $('#bills-tips').outerHTML = billTipsCard(r.error ? state.bills.tips : r.tips, r);
+}
+
+async function billEdit(id) {
+  const x = state.bills.bills.find((b) => b.id === id);
+  const me = ACCOUNT?.status().email;
+  // A family bill someone else added can't be made personal by you.
+  const locked = !x.personal && x.owner && me && x.owner !== me;
+  const got = await ask({
+    title: `Change ${x.name}`,
+    body: field('name', 'What', 'text', x.name, 'maxlength="60"') + field('amount', 'Amount (£)', 'text', x.amount, 'inputmode="decimal"') +
+      `<label class="field" style="margin-top:10px">How often<select name="every">${state.bills.every.map((e) => `<option value="${esc(e.key)}" ${e.key === x.every ? 'selected' : ''}>${esc(e.label)}</option>`).join('')}</select></label>` +
+      field('due', 'Next due', 'date', x.next || x.due) +
+      `<label class="field" style="margin-top:10px">Kind<select name="category">${state.bills.categories.map((c) => `<option value="${esc(c.key)}" ${c.key === x.category ? 'selected' : ''}>${esc(c.emoji)} ${esc(c.label)}</option>`).join('')}</select></label>` +
+      `<label class="field" style="margin-top:10px"><span><input type="checkbox" name="auto" ${x.auto ? 'checked' : ''} style="width:auto"> Pays itself (direct debit or standing order)</span></label>` +
+      field('ends', 'Deal or contract ends (optional)', 'date', x.ends || '') + field('notes', 'Notes', 'text', x.notes || '', 'maxlength="200"') +
+      billVisibility(x.personal, locked) + (locked ? `<p class="hint">Only ${esc(personName(x.owner))} can make this one personal.</p>` : ''),
+    ok: 'Save',
+  });
+  if (!got) return;
+  const body = { name: got.name, amount: got.amount, every: got.every, category: got.category, auto: Boolean(got.auto), ends: got.ends || null, notes: got.notes || '' };
+  if (got.due !== (x.next || x.due)) body.due = got.due;
+  if (!locked) body.personal = Boolean(got.personal);
+  await api('/bills/' + encodeURIComponent(id), { method: 'PUT', body });
+  toast(body.personal && !x.personal ? 'Saved. Only you can see it now' : !body.personal && x.personal && !locked ? 'Saved. The family can see it now' : 'Saved');
+  renderBills();
+}
+
+document.addEventListener('submit', guard(async (e) => {
+  if (e.target.id !== 'bill-form') return;
+  e.preventDefault();
+  const f = formData(e.target);
+  const b = await api('/bills', { method: 'POST', body: { name: f.name, amount: f.amount, every: f.every, due: f.due, category: f.category, auto: Boolean(f.auto), personal: Boolean(f.personal) } });
+  toast(`${b.name} added${b.personal ? ' (just for you)' : ''}`);
+  renderBills();
+}));
+
+document.addEventListener('click', guard(async (e) => {
+  const t = e.target.closest('[data-bills-view], [data-bill-paid], [data-bill-undo], [data-bill-edit], [data-bill-del], [data-bill-tip]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.billsView) { state.billsView = d.billsView; return renderBills(); }
+  if (d.billEdit) return billEdit(d.billEdit);
+  if (d.billPaid) {
+    const b = await api(`/bills/${encodeURIComponent(d.billPaid)}/paid`, { method: 'POST', body: {} });
+    toast(b.done ? `${b.name} paid` : `${b.name} paid. Next due ${fmtShort(b.due)}`);
+    return renderBills();
+  }
+  if (d.billUndo) {
+    await api(`/bills/${encodeURIComponent(d.billUndo)}/unpaid`, { method: 'POST', body: {} });
+    toast('Undone');
+    return renderBills();
+  }
+  if (d.billDel) {
+    const x = state.bills.bills.find((b) => b.id === d.billDel);
+    if (!(await ask({ title: `Remove ${x.name}?`, body: `<p>${x.personal ? 'It goes from your devices and your account.' : 'It goes for everyone in the household.'}</p>`, ok: 'Remove', danger: true }))) return;
+    await api('/bills/' + encodeURIComponent(d.billDel), { method: 'DELETE' });
+    toast('Removed');
+    return renderBills();
+  }
+  if (d.billTip) {
+    await api('/bills/tips/dismiss', { method: 'POST', body: { key: d.billTip } });
+    t.closest('li')?.remove();
+  }
+}));
+
 // ---------- calendar and trips ----------
 // School and club days (with the kit to pack), birthdays, one-off events and trips away.
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -3047,6 +3220,7 @@ async function renderKitchen() {
   const off = (tool) => look.hidden.includes(tool);
   const panel = (id, title, body, extra = '') => `<section class="card k-panel" id="k-${id}"><div class="card-head"><h2>${title}</h2>${extra}</div>${body}</section>`;
   const tonight = d.food.plan[0];
+  const shared = d.reminders.filter((r) => !r.personal && !(r.kind === 'bills' && off('bills')));
   const panels = {
     dinner: () => off('food') ? '' : panel('dinner', "🍽️ Tonight's dinner", tonight
       ? `<div class="k-dinner"><span class="k-dinner-emoji">${MEAL_EMOJI(tonight.name)}</span><div><div class="k-big" id="k-dinner-name">${esc(tonight.name)}</div>
@@ -3074,7 +3248,8 @@ async function renderKitchen() {
     calendar: () => off('calendar') || !(d.calendar.todayList.length || d.calendar.tomorrowList.length) ? '' : panel('calendar', '📅 Today and tomorrow',
       `<ul class="list">${[...d.calendar.todayList, ...d.calendar.tomorrowList].slice(0, 8).map((o) => `<li class="row"><span class="emoji">${esc(o.emoji)}</span>
         <div class="grow"><div class="title">${esc(o.title)}${o.time ? ` · ${esc(o.time)}` : ''}</div><div class="sub">${esc(o.date === d.calendar.today ? 'Today' : 'Tomorrow')}${o.whoNames.length ? ` · ${esc(o.whoNames.join(', '))}` : ''}${o.kit.length ? ` · take ${esc(o.kit.join(', '))}` : ''}</div></div></li>`).join('')}</ul>`),
-    reminders: () => !d.reminders.length ? '' : panel('reminders', '🔔 Reminders', reminderList(d.reminders, 4)),
+    // A kitchen screen is for everyone, so personal bills stay off it.
+    reminders: () => !shared.length ? '' : panel('reminders', '🔔 Reminders', reminderList(shared, 4)),
     week: () => off('food') ? '' : panel('week', "📅 The week's dinners", weekStrip(d.food.plan)),
   };
   const now = new Date();

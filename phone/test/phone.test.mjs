@@ -62,6 +62,22 @@ test('account sync never uploads the AI key and keeps each device its own', asyn
   assert.equal(hasContent(remote), true);
 });
 
+test('personal bills and AI bill tips never go into the household copy, and stay on the device', async () => {
+  const { shareable, merged, personalBills } = await import('../mobile/cloud.js');
+  const fam = { id: 'f', name: 'Council tax' };
+  const gym = { id: 'g', name: 'Gym', personal: true, owner: 'me@example.com' };
+  const other = { id: 'o', name: 'Their gym', personal: true, owner: 'them@example.com' };
+  const local = { bills: { items: [fam, gym, other], dismissed: {} }, ai: { provider: 'anthropic', suggestCache: { meals: { raw: 1 }, 'bills:me@example.com': { raw: 2 } } } };
+  const up = shareable(local);
+  assert.deepEqual(up.bills.items, [fam]);
+  assert.deepEqual(Object.keys(up.ai.suggestCache), ['meals']);
+  assert.deepEqual(local.bills.items.length, 3, "the device's own copy is untouched");
+  const remote = { bills: { items: [{ ...fam, amount: 170 }], dismissed: {} } };
+  assert.deepEqual(merged(remote, local).bills.items, [{ ...fam, amount: 170 }, gym, other]);
+  assert.deepEqual(personalBills(local, 'me@example.com'), [gym]);
+  assert.equal(merged({ food: {} }, {}).bills, undefined);
+});
+
 test('two people saving at once: both sets of changes are kept', async () => {
   const { merge3 } = await import('../mobile/merge.js');
   const base = {

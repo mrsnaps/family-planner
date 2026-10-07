@@ -229,6 +229,32 @@ try {
   await c.page.waitForSelector('#shop-list :text("Added by Jo")');
   assert.doesNotMatch(await c.page.textContent('#shop-list'), /Added by Nathan/, 'your own items say nothing');
   ok('the shared list updates live on the other phone and shows who added each thing');
+
+  // Bills: a family one the household sees, and a personal one only Nathan's devices get.
+  await tapNav(c.page, 'bills');
+  await c.page.fill('#bill-form input[name=name]', 'Council tax');
+  await c.page.fill('#bill-form input[name=amount]', '168');
+  await c.page.click('#bill-form button.primary');
+  await c.toast(/Council tax added/);
+  await c.page.fill('#bill-form input[name=name]', 'Gym');
+  await c.page.fill('#bill-form input[name=amount]', '29');
+  await c.page.check('#bill-form input[name=personal][value="1"]');
+  await c.page.click('#bill-form button.primary');
+  await c.toast(/Gym added \(just for you\)/);
+  await c.page.waitForSelector('#bills-all :text("Personal")');
+  await c.page.waitForFunction(() => !window.FamilyPlannerAccount.status().pending && !window.FamilyPlannerAccount.status().syncing, null, { timeout: 5000 });
+  await until(() => cloud.privateData(EMAIL)?.bills.length === 1);
+  assert.deepEqual(cloud.data(EMAIL).bills.items.map((b) => b.name), ['Council tax']);
+  assert.ok(!JSON.stringify(cloud.data(EMAIL)).includes('Gym'), 'nothing about it in the household copy');
+  assert.deepEqual(cloud.privateData(EMAIL).bills.map((b) => b.name), ['Gym']);
+  await d.sync();
+  assert.deepEqual((await d.api('/bills')).data.bills.map((b) => b.name), ['Council tax']);
+  await tapNav(d.page, 'bills');
+  await d.page.waitForSelector('#bills-all :text("Council tax")');
+  assert.doesNotMatch(await d.page.textContent('#page'), /Gym/);
+  await b.sync();
+  assert.deepEqual((await b.api('/bills')).data.bills.map((x) => x.name).sort(), ['Council tax', 'Gym'], "Nathan's other device gets it");
+  ok('family bills are shared; personal ones go only to your own devices');
   await tapNav(d.page, 'settings');
   await d.page.click('[data-account="leave"]');
   await d.page.click('#dialog-form button:has-text("Leave")');

@@ -1,7 +1,7 @@
 // Reminders gathered from every tool, newest-urgent first. The web app shows them on
 // Home; the phone app can turn them into notifications. Each has a stable id so a
 // client can tell which ones it has already shown.
-function reminders({ food, clothes, shopping, chores = null, calendar = null, swaps = [], money = null, trips = [] }) {
+function reminders({ food, clothes, shopping, chores = null, calendar = null, swaps = [], money = null, trips = [], bills = null }) {
   const out = [];
   for (const e of food.expiringSoon) {
     out.push({
@@ -90,6 +90,27 @@ function reminders({ food, clothes, shopping, chores = null, calendar = null, sw
     out.push({ id: `money-${money.month}-${money.status}`, kind: 'money', level: money.status === 'close' ? 'info' : 'warn', date: null,
       title: money.status === 'over' ? `Over this month's budget by £${Math.abs(money.left).toFixed(0)}` : money.status === 'heading-over' ? `On course to go over the budget this month` : `£${money.left.toFixed(0)} left in this month's budget`,
       detail: `£${money.spent.toFixed(0)} spent of £${money.budget}${money.status === 'heading-over' ? `, heading for about £${money.projected.toFixed(0)}` : ''}` });
+  }
+  // Bills: ones paid by hand when they're due (and until they're marked paid), ones that pay
+  // themselves the day before they go out, and deals ending soon. Personal ones are marked, so
+  // a shared screen (the kitchen) can leave them out.
+  if (bills) {
+    const gbp = (n) => `£${Number(n).toFixed(Number(n) % 1 ? 2 : 0)}`;
+    for (const b of bills.bills) {
+      if (b.done || b.days === null) continue;
+      const base = { kind: 'bills', date: b.next, ...(b.personal ? { personal: true } : {}) };
+      if (!b.auto && b.days <= 3) {
+        out.push({ ...base, id: `bill-${b.id}-${b.next}-${b.days < 0 ? 'late' : b.days === 0 ? 'today' : 'soon'}`, level: b.days < 0 ? 'urgent' : b.days === 0 ? 'warn' : 'info',
+          title: b.days < 0 ? `${b.name} was due ${-b.days === 1 ? 'yesterday' : `${-b.days} days ago`}` : b.days === 0 ? `Pay ${b.name} today` : `${b.name} is due in ${b.days} day${b.days === 1 ? '' : 's'}`,
+          detail: `${gbp(b.amount)}. Mark it paid on the Bills page.` });
+      } else if (b.auto && b.days === 1) {
+        out.push({ ...base, id: `bill-${b.id}-${b.next}-auto`, level: 'info', title: `${gbp(b.amount)} for ${b.name} goes out tomorrow` });
+      }
+    }
+    for (const t of bills.tips.filter((x) => x.kind === 'renewal')) {
+      const b = bills.bills.find((x) => x.id === t.billId);
+      out.push({ id: `bill-tip-${t.key}`, kind: 'bills', level: 'info', date: null, title: t.text, ...(b && b.personal ? { personal: true } : {}) });
+    }
   }
   if (shopping > 0) out.push({ id: `shopping-${shopping}`, kind: 'shopping', level: 'info', title: `${shopping} thing${shopping === 1 ? '' : 's'} on the shopping list`, date: null });
   const rank = { urgent: 0, warn: 1, info: 2 };

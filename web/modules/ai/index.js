@@ -237,7 +237,7 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
   router.get('/api/v1/ai/tasks/:task', (req, body, { task }) => {
     const area = Object.values(suggesters).find((a) => a.task === task);
     if (area) {
-      const params = suggestParams(Object.fromEntries(req.query), area);
+      const params = suggestParams(Object.fromEntries(req.query), area, req);
       return { task, system: SUGGEST.SYSTEM[task], prompt: area.prompt(params), needsImage: false, schema: SUGGEST.SCHEMAS[task], saveWith: `POST /api/v1/ai/suggest/${task.slice(8)} with { result }` };
     }
     if (!SCHEMAS[task]) throw new HttpError(404, `Unknown task. Try: ${[...Object.keys(SCHEMAS), ...Object.keys(SUGGEST.SCHEMAS)].join(', ')}`);
@@ -254,8 +254,9 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
   // Suggestions from the AI for one area: shopping, meals or outfits (with childId, and
   // tempC and rain when the weather is known). Cached until the household's data changes,
   // or for a day. "result" is an answer the phone's on-device AI already worked out.
-  const suggestParams = (b, area) => {
-    const p = { childId: b.childId || null, tripId: b.tripId ? String(b.tripId) : null, tempC: b.tempC === undefined || b.tempC === null || b.tempC === '' ? null : Number(b.tempC), rain: b.rain === true || b.rain === '1' || b.rain === 'true' };
+  // member: who is asking (X-Family-Member), so personal bills only go into their own prompt.
+  const suggestParams = (b, area, req) => {
+    const p = { member: (req && req.headers && String(req.headers['x-family-member'] || '').toLowerCase()) || null, childId: b.childId || null, tripId: b.tripId ? String(b.tripId) : null, tempC: b.tempC === undefined || b.tempC === null || b.tempC === '' ? null : Number(b.tempC), rain: b.rain === true || b.rain === '1' || b.rain === 'true' };
     for (const k of area.needs || []) if (!p[k]) throw new HttpError(400, `${k} is needed`);
     if (p.tempC !== null && !Number.isFinite(p.tempC)) p.tempC = null;
     return p;
@@ -264,7 +265,7 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
     const area = Object.prototype.hasOwnProperty.call(suggesters, name) ? suggesters[name] : null;
     if (!area) throw new HttpError(404, `Unknown area. Try: ${Object.keys(suggesters).join(', ')}`);
     body = body || {};
-    const params = suggestParams(body, area);
+    const params = suggestParams(body, area, req);
     let prompt;
     try {
       prompt = area.prompt(params);
@@ -273,7 +274,7 @@ function register(router, store, { familySummary, food, suggesters = {} }) {
     }
     const s = settings();
     const cache = (s.suggestCache ||= {});
-    const slot = name + (params.childId ? ':' + params.childId : '') + (params.tripId ? ':' + params.tripId : '');
+    const slot = name + (params.childId ? ':' + params.childId : '') + (params.tripId ? ':' + params.tripId : '') + (area.private && params.member ? ':' + params.member : '');
     const hash = fingerprint(prompt);
     const hit = cache[slot];
     let entry;

@@ -353,7 +353,8 @@ div.field .seg button { font-size: 13.5px; }
 :root[data-hide~="clothes"] [data-tool~="clothes"],
 :root[data-hide~="shopping"] [data-tool~="shopping"],
 :root[data-hide~="chores"] [data-tool~="chores"],
-:root[data-hide~="calendar"] [data-tool~="calendar"] { display: none !important; }
+:root[data-hide~="calendar"] [data-tool~="calendar"],
+:root[data-hide~="bills"] [data-tool~="bills"] { display: none !important; }
 
 /* ---------- kitchen screen ---------- */
 body.kitchen-mode .sidebar, body.kitchen-mode .tabbar, body.kitchen-mode .page-head { display: none !important; }
