@@ -100,6 +100,17 @@ const SCHEMAS = {
     required: ['boxes', 'toBuy'],
     additionalProperties: false,
   },
+  'suggest-bills': {
+    type: 'object',
+    properties: {
+      tips: {
+        type: 'array',
+        items: { type: 'object', properties: { billId: str, text: str }, required: ['billId', 'text'], additionalProperties: false },
+      },
+    },
+    required: ['tips'],
+    additionalProperties: false,
+  },
   'suggest-outfits': {
     type: 'object',
     properties: {
@@ -158,6 +169,14 @@ SYSTEM['suggest-packing'] =
   'leave detail empty. Use the rule-based list as a starting point: keep what is right, fix quantities, add what it missed. ' +
   'qty is how many (1 when it doesn\'t matter). At most 80 items.';
 
+SYSTEM['suggest-bills'] =
+  'You help a UK family keep on top of their household bills. From the bills listed, give a few practical tips: ' +
+  'deals ending or renewing soon that are worth comparing, prices that went up, subscriptions that add up, ' +
+  'bills that could be cheaper paid another way (yearly instead of monthly, or by direct debit), and busy weeks to plan for. ' +
+  'Use the rule-based tips as a starting point: keep the good ones, drop weak ones, add anything they missed. ' +
+  'Never invent prices or companies, and don\'t give regulated financial advice. ' +
+  'Each tip is one or two short plain sentences. Give the bill\'s id when a tip is about one bill, otherwise an empty string. At most 6 tips, most useful first.';
+
 const DAY = 86400000;
 const line = (p) => `- ${p.name}${p.quantity != null ? `: ${p.quantity} ${p.unit || ''}`.trimEnd() : ''}${p.expiry ? ` (use by ${p.expiry})` : ''}`;
 const familyLine = (f) => {
@@ -189,7 +208,7 @@ function habitsText(history, recipesById, now) {
   return { bought: b.join('\n') || '- (nothing recorded yet)', cooked: c.join('\n') || '- (nothing recorded yet)' };
 }
 
-function createSuggesters({ familySummary, food, clothes, shopping, chores, packing = null }) {
+function createSuggesters({ familySummary, food, clothes, shopping, chores, packing = null, bills = null }) {
   const today = () => new Date().toISOString().slice(0, 10);
 
   const shoppingArea = {
@@ -466,7 +485,37 @@ function createSuggesters({ familySummary, food, clothes, shopping, chores, pack
     },
   };
 
-  return { shopping: shoppingArea, meals: mealsArea, outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}), ...(packingArea ? { packing: packingArea } : {}), ...(lunchboxArea ? { lunchbox: lunchboxArea } : {}) };
+  // Bills: tips about the bills this person can see (the family's, and their own personal
+  // ones). The answer is remembered per person (private), so nobody sees another's tips.
+  const billsArea = bills && {
+    task: 'suggest-bills',
+    private: true,
+    prompt({ member }) {
+      const v = bills.view(member);
+      const list = v.bills.filter((b) => !b.done).map((b) => `- ${b.id} | ${b.name} | ${b.label} | £${b.amount} ${b.every === 'once' ? 'once' : `per ${b.every}`} | next due ${b.next}${b.auto ? ' | pays itself' : ' | paid by hand'}${b.ends ? ` | deal ends ${b.ends}` : ''}${(b.changes || []).length ? ` | price changes: ${b.changes.map((c) => `${c.date} £${c.from} to £${c.to}`).join(', ')}` : ''}${b.personal ? ' | personal' : ''}`);
+      return [
+        `Today is ${today()}.`, familyLine(familySummary()),
+        `Bills (id | name | kind | amount | next due | how it's paid | deal end | price changes):\n${list.join('\n') || '- (none yet)'}`,
+        `About £${v.totals.all} a month in all; £${v.totals.leftThisMonth} still to go out this month.`,
+        `Rule-based tips:\n${v.tips.map((t) => `- ${t.text}`).join('\n') || '- (none)'}`,
+        'What tips would help them with their bills?',
+      ].join('\n\n');
+    },
+    normalize(r, { member }) {
+      const ids = new Set(bills.visible(member).map((b) => b.id));
+      const tips = [];
+      for (const t of Array.isArray(r.tips) ? r.tips : []) {
+        const text = String(t.text || '').trim().slice(0, 300);
+        if (!text) continue;
+        // The key holds a number made from the words, not the words, as it may be kept in shared data.
+        const hash = [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7).toString(36);
+        tips.push({ key: `ai|${ids.has(t.billId) ? t.billId : ''}|${hash}`, ...(ids.has(t.billId) ? { billId: t.billId } : {}), kind: 'ai', text, source: 'ai' });
+      }
+      return { tips: tips.slice(0, 6) };
+    },
+  };
+
+  return { shopping: shoppingArea, meals: mealsArea, ...(billsArea ? { bills: billsArea } : {}), outfits: outfitsArea, ...(choresArea ? { chores: choresArea } : {}), ...(packingArea ? { packing: packingArea } : {}), ...(lunchboxArea ? { lunchbox: lunchboxArea } : {}) };
 }
 
 module.exports = { createSuggesters, SCHEMAS, SYSTEM };

@@ -136,14 +136,25 @@ export async function startMockCloud(port) {
         leave(email);
         return send(res, 200, { ok: true });
       }
+      // Personal bills: each person's own file, like infra/lambda/index.js.
+      const mine = files.get(`private:${email}`);
+      if (req.url === '/private') {
+        if (req.method === 'GET') return send(res, 200, mine ? { data: JSON.parse(mine.body), rev: mine.rev } : { data: null, rev: null });
+        const body = JSON.parse(raw);
+        if (body.baseRev ? mine?.rev !== body.baseRev : mine) return send(res, 409, { error: 'Changed on another device', data: JSON.parse(mine.body), rev: mine.rev });
+        const rev = `"p${++n}"`;
+        files.set(`private:${email}`, { body: JSON.stringify({ bills: body.data.bills.map((b) => ({ ...b, personal: true })) }), rev });
+        return send(res, 200, { rev });
+      }
       const file = files.get(hid);
-      if (req.url === '/rev') return send(res, 200, { rev: file ? file.rev : null });
+      if (req.url === '/rev') return send(res, 200, { rev: file ? file.rev : null, privateRev: mine ? mine.rev : null });
       if (req.url !== '/data') return send(res, 404, { error: 'Not found' });
       if (req.method === 'GET') return send(res, 200, file ? { data: JSON.parse(file.body), rev: file.rev, savedAt: new Date().toISOString() } : { data: null, rev: null });
       const body = JSON.parse(raw);
       if (body.baseRev ? file?.rev !== body.baseRev : file) return send(res, 409, { error: 'Changed on another device', data: JSON.parse(file.body), rev: file.rev });
       const rev = `"r${++n}"`;
-      files.set(hid, { body: JSON.stringify(body.data), rev });
+      const data = body.data.bills?.items ? { ...body.data, bills: { ...body.data.bills, items: body.data.bills.items.filter((b) => !b.personal) } } : body.data;
+      files.set(hid, { body: JSON.stringify(data), rev });
       send(res, 200, { rev });
     });
   });
@@ -156,6 +167,7 @@ export async function startMockCloud(port) {
     push,
     shortcut,
     data: (email) => (files.get(home(email)) ? JSON.parse(files.get(home(email)).body) : null),
+    privateData: (email) => (files.get(`private:${email}`) ? JSON.parse(files.get(`private:${email}`).body) : null),
     close: () => server.close(),
   };
 }

@@ -114,8 +114,8 @@ test('either person saving changes the one household file, and clashes still 409
 
 test('the version check matches the saved data, for whoever asks in the household', async () => {
   const data = await call('dad', 'GET', '/data');
-  assert.deepStrictEqual((await call('mum', 'GET', '/rev')).body, { rev: data.body.rev });
-  assert.deepStrictEqual((await call('nobody', 'GET', '/rev')).body, { rev: null });
+  assert.deepStrictEqual((await call('mum', 'GET', '/rev')).body, { rev: data.body.rev, privateRev: null });
+  assert.deepStrictEqual((await call('nobody', 'GET', '/rev')).body, { rev: null, privateRev: null });
 });
 
 test('a third person can be invited by someone who joined', async () => {
@@ -437,4 +437,40 @@ test('"Tell Family Planner": Siri sentences use the chat\'s rules, the rest wait
   r = await say('Leo has swimming every Thursday');
   assert.equal(r.body.message, "I'll do that when you next open the app");
   assert.equal((await say('  ')).status, 400);
+});
+
+test('personal bills are kept in each person\'s own file, never the household\'s', async () => {
+  const bills = (items) => ({ bills: { items, dismissed: {} } });
+  const fam = { id: 'f1', name: 'Council tax', amount: 168 };
+  const gym = { id: 'p1', name: 'Gym', amount: 29, personal: true, owner: 'bills1@example.com' };
+  // Two people in one household.
+  const code = (await call('bills1', 'POST', '/invite')).body.code;
+  assert.equal((await call('bills2', 'POST', '/join', { code })).status, 200);
+  // An app that sends a personal bill with the household's data: it's dropped.
+  assert.equal((await save('bills1', bills([fam, gym]))).status, 200);
+  assert.deepEqual((await call('bills2', 'GET', '/data')).body.data.bills.items, [fam]);
+  assert.deepEqual((await call('bills1', 'GET', '/data')).body.data.bills.items, [fam]);
+
+  // The person's own file: only they can read or change it.
+  assert.deepEqual((await call('bills1', 'GET', '/private')).body, { data: null, rev: null });
+  const first = await call('bills1', 'PUT', '/private', { data: { bills: [{ ...gym, personal: false }] }, baseRev: null });
+  assert.equal(first.status, 200);
+  const mine = (await call('bills1', 'GET', '/private')).body;
+  assert.deepEqual(mine.data.bills, [gym], 'everything in it is personal');
+  assert.equal(mine.rev, first.body.rev);
+  assert.deepEqual((await call('bills2', 'GET', '/private')).body.data, null, "the other person can't see it");
+  assert.ok(![...files.values()].some((f) => f.body.includes('Gym') && !f.body.startsWith('{"bills":[')), 'not in any shared file');
+
+  // The version check covers it, so their other devices notice; clashes come back as 409.
+  const rev = (await call('bills1', 'GET', '/rev')).body;
+  assert.equal(rev.privateRev, first.body.rev);
+  assert.equal((await call('bills2', 'GET', '/rev')).body.privateRev, null);
+  const clash = await call('bills1', 'PUT', '/private', { data: { bills: [] }, baseRev: null });
+  assert.equal(clash.status, 409);
+  assert.deepEqual(clash.body.data.bills, [gym]);
+  assert.equal((await call('bills1', 'PUT', '/private', { data: { bills: 'x' } })).status, 400);
+
+  // Deleting the account deletes the file.
+  await call('bills1', 'POST', '/delete-account');
+  assert.ok(![...files.keys()].some((k) => k === 'members/bills1.private.json'));
 });

@@ -2,6 +2,8 @@
 // (infra/cloud.yaml), so the iPhone, iPad and home screen version all share one copy.
 // The web UI drives it through window.FamilyPlannerAccount (see the Account card in Settings).
 // The AI key and AI usage stay on each device and are never uploaded.
+// Personal bills are never part of the household's copy: they're saved in this person's own
+// file online (GET/PUT /private), so nobody else in the household can see them.
 import { Preferences } from '@capacitor/preferences';
 import CONFIG from './cloud-config.js';
 import { saveData } from './storage.js';
@@ -10,6 +12,7 @@ import { merge3 } from './merge.js';
 const SESSION_KEY = 'fp-account';
 const SYNC_KEY = 'fp-sync';
 const BASE_KEY = 'fp-sync-base'; // the copy last saved or fetched, for merging two people's changes
+const PRIVATE_BASE_KEY = 'fp-sync-private'; // this person's personal bills as last saved or fetched
 const PUSH_KEY = 'fp-push'; // 'on' once notifications are turned on for this phone (localStorage)
 const cfg = () => globalThis.__fpCloudConfig || CONFIG;
 
@@ -52,25 +55,36 @@ async function cognito(action, body) {
   return data;
 }
 
-// What gets uploaded: everything except this device's AI key (and which server it's for) and usage count.
+// What gets uploaded: everything except this device's AI key (and which server it's for) and
+// usage count, personal bills, and the AI's tips about bills (which can mention personal ones).
 export function shareable(data) {
   const out = { ...data };
   delete out.demo;
   delete out.demoSaved;
   if (out.ai) {
     const { apiKey, keyFor, usage, chatUsage, ...rest } = out.ai;
+    if (rest.suggestCache) rest.suggestCache = Object.fromEntries(Object.entries(rest.suggestCache).filter(([k]) => !k.startsWith('bills')));
     out.ai = rest;
   }
+  if (Array.isArray(out.bills?.items) && out.bills.items.some((b) => b?.personal)) out.bills = { ...out.bills, items: out.bills.items.filter((b) => !b?.personal) };
   return out;
 }
 
-// Take the account's copy, keeping this device's AI key and usage.
+// Take the account's copy, keeping this device's AI key and usage, and its personal bills.
 export function merged(remote, local) {
   const out = { ...remote };
   if (remote.ai || local.ai) out.ai = { ...(local.ai || {}), ...(remote.ai || {}), apiKey: local.ai?.apiKey || '', keyFor: local.ai?.keyFor, usage: local.ai?.usage, chatUsage: local.ai?.chatUsage };
   for (const k of ['keyFor', 'usage', 'chatUsage']) if (out.ai && out.ai[k] === undefined) delete out.ai[k];
+  const personal = (local.bills?.items || []).filter((b) => b?.personal);
+  if (personal.length) {
+    const family = (Array.isArray(remote.bills?.items) ? remote.bills.items : []).filter((b) => !b?.personal);
+    out.bills = { dismissed: {}, ...(remote.bills || {}), items: [...family, ...personal] };
+  }
   return out;
 }
+
+// This person's personal bills (any left on the device by someone else who signed in stay put).
+export const personalBills = (data, email) => (data.bills?.items || []).filter((b) => b?.personal && (!b.owner || b.owner === email));
 
 export function hasContent(d) {
   return Boolean(
@@ -100,6 +114,7 @@ export function createAccount(store) {
   let pendingChoice = null;
   let changes = 0; // counts saves, so a change made while uploading isn't marked as saved
   let base = null;
+  let privateBase = null;
   // Demo mode (Settings): the sample family stays on this device only.
   const inDemo = () => Boolean(store.data.demo);
   const notInDemo = () => {
@@ -159,8 +174,51 @@ export function createAccount(store) {
       body: body && JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok && !(res.status === 409 && path === '/data')) throw new AccountError('Api', data.error || data.message || `Saving online failed (${res.status})`);
+    if (!res.ok && !(res.status === 409 && (path === '/data' || path === '/private'))) {
+      throw Object.assign(new AccountError('Api', data.error || data.message || `Saving online failed (${res.status})`), { status: res.status });
+    }
     return { status: res.status, ...data };
+  }
+
+  // Personal bills: kept in step with this person's own file online, merged item by item
+  // like the household's data when two of their devices changed them.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  async function setPersonal(list) {
+    const bills = store.data.bills || (store.data.bills = { items: [], dismissed: {} });
+    const keep = (bills.items || []).filter((b) => !(b?.personal && (!b.owner || b.owner === session.email)));
+    bills.items = [...keep.filter((b) => !b?.personal), ...list, ...keep.filter((b) => b?.personal)];
+    await saveData(store.data);
+    emit('familyplanner:datachanged', { reason: 'remote' });
+  }
+  async function syncPrivate() {
+    let r;
+    try {
+      r = await api('GET', null, '/private');
+    } catch (e) {
+      if (e.status === 404) return; // an older server: personal bills just stay on this device
+      throw e;
+    }
+    for (let tries = 0; tries < 3; tries++) {
+      const mine = personalBills(store.data, session.email);
+      const theirs = r.data?.bills || [];
+      let next = mine;
+      if (r.rev !== sync.privateRev) {
+        next = merge3(privateBase || [], mine, theirs);
+        if (!same(next, mine)) await setPersonal(next);
+      }
+      if (same(next, theirs)) {
+        sync.privateRev = r.rev || null;
+        privateBase = theirs;
+        return Promise.all([keepSync(), saveJson(PRIVATE_BASE_KEY, theirs)]);
+      }
+      const put = await api('PUT', { data: { bills: next }, baseRev: r.rev || null }, '/private');
+      if (put.status !== 409) {
+        sync.privateRev = put.rev;
+        privateBase = next;
+        return Promise.all([keepSync(), saveJson(PRIVATE_BASE_KEY, next)]);
+      }
+      r = put;
+    }
   }
 
   function replaceLocal(remote) {
@@ -173,7 +231,7 @@ export function createAccount(store) {
   // Replace what's on this device with the account's copy.
   async function adopt(remote, rev, reason = 'remote') {
     await replaceLocal(remote);
-    sync = { rev, dirty: false, savedAt: new Date().toISOString() };
+    sync = { ...sync, rev, dirty: false, savedAt: new Date().toISOString() };
     await Promise.all([keepSync(), keepBase(remote)]);
     if (reason) emit('familyplanner:datachanged', { reason });
   }
@@ -193,7 +251,7 @@ export function createAccount(store) {
         sync.rev = r.rev;
         emit('familyplanner:datachanged', { reason: 'merged' });
         if (JSON.stringify(both) === JSON.stringify(theirs)) {
-          sync = { rev: r.rev, dirty: changes !== sent, savedAt: new Date().toISOString() };
+          sync = { ...sync, rev: r.rev, dirty: changes !== sent, savedAt: new Date().toISOString() };
           await keepSync();
           return true;
         }
@@ -202,7 +260,7 @@ export function createAccount(store) {
       await adopt(theirs, r.rev, 'conflict');
       return false;
     }
-    sync = { rev: r.rev, dirty: changes !== sent, savedAt: new Date().toISOString() };
+    sync = { ...sync, rev: r.rev, dirty: changes !== sent, savedAt: new Date().toISOString() };
     await Promise.all([keepSync(), keepBase(data)]);
     if (sync.dirty) schedule();
     return true;
@@ -213,7 +271,7 @@ export function createAccount(store) {
     if (!session || busy || sync.dirty || inDemo()) return status();
     try {
       const r = await api('GET', null, '/rev');
-      if (r.rev && r.rev !== sync.rev) return syncNow('live');
+      if ((r.rev && r.rev !== sync.rev) || (r.privateRev !== undefined && (r.privateRev || null) !== (sync.privateRev || null))) return syncNow('live');
     } catch {
       // Offline or signed out: the next full sync reports it.
     }
@@ -237,6 +295,7 @@ export function createAccount(store) {
             await keepSync();
           }
         }
+        await syncPrivate();
         error = null;
       } catch (e) {
         error = e.message;
@@ -268,8 +327,9 @@ export function createAccount(store) {
     idToken = null;
     sync = { rev: null, dirty: false, savedAt: null };
     base = null;
+    privateBase = null;
     try { localStorage.removeItem(PUSH_KEY); } catch {}
-    await Promise.all([saveJson(SESSION_KEY, null), saveJson(SYNC_KEY, null), saveJson(BASE_KEY, null)]);
+    await Promise.all([saveJson(SESSION_KEY, null), saveJson(SYNC_KEY, null), saveJson(BASE_KEY, null), saveJson(PRIVATE_BASE_KEY, null)]);
     changed();
   }
 
@@ -428,6 +488,7 @@ export function createAccount(store) {
       session = await loadJson(SESSION_KEY);
       sync = { ...sync, ...(await loadJson(SYNC_KEY)) };
       base = await loadJson(BASE_KEY);
+      privateBase = await loadJson(PRIVATE_BASE_KEY);
     },
     signIn,
     // Both devices had data: keep the account's copy or replace it with this device's.

@@ -110,6 +110,10 @@ Everything the UI does goes through this JSON API, so a phone app can use it unc
 | POST | `/api/v1/clothes/items/:id/hand-down` | Move an item to `{ childId }` |
 | GET | `/api/v1/clothes/outfit-of-the-day/:childId?tempC=&rain=` | Today's outfit, adjusted for weather |
 | GET/PUT | `/api/v1/clothes/prices` | Typical prices used for the budget |
+| GET/POST | `/api/v1/bills` | Bills you can see, with what's coming up, monthly totals and tips; add `{ name, amount, every, due, category, auto, ends, personal }` |
+| PUT/DELETE | `/api/v1/bills/:id` | Change (including `personal`) or remove a bill |
+| POST | `/api/v1/bills/:id/paid`, `/api/v1/bills/:id/unpaid` | Mark paid (moves it to its next due date), or undo that |
+| POST | `/api/v1/bills/tips/dismiss` | `{ key }`: hide a tip for 30 days |
 | GET | `/api/v1/reminders` | `[{ id, kind, level, title, detail, date }]`, ids are stable |
 | GET | `/api/v1/export`, POST `/api/v1/import` | Backup and restore |
 | GET/PUT | `/api/v1/ai/settings` | Provider, model, key (write only), monthly limit, `ready` |
@@ -130,6 +134,8 @@ modules/family.js         Family settings and portion sizes (shared)
 modules/food/             Food planner: recipes.js, engine.js (logic), index.js (routes)
 modules/clothes/          Clothes matcher: sizes.js, shoes.js, engine.js (logic), index.js (routes)
 modules/shopping/         Shopping list that reads from both tools
+modules/bills/            Bills: engine.js (due dates, totals, tips), index.js (routes). Personal
+                          bills are only seen by whoever sent X-Family-Member when adding them
 modules/reminders.js      Reminders across food, clothes, laundry and shopping
 modules/ai/               AI providers (Claude, OpenAI-compatible) and tasks
 public/sw.js              Offline support

@@ -6,7 +6,7 @@
 const { Store } = require('../lib/store');
 const { HttpError } = require('../lib/http');
 
-const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores', 'calendar', 'packing', 'money'];
+const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores', 'calendar', 'packing', 'money', 'bills'];
 const DAY = 86400000;
 const ALEX = 'alex@parker.example';
 const SAM = 'sam@parker.example';
@@ -150,6 +150,28 @@ async function buildSample(createApp, now = new Date()) {
     await call('POST', '/api/v1/spending', { amount, date: day(-ago), shop, category }, by);
   }
   await call('PUT', '/api/v1/money/budget', { budget: 750 });
+
+  // Bills: the family's, added by Alex and Sam, and one personal one (with no owner, so
+  // whoever is looking at the demo sees it as theirs). Energy has just gone up, the car
+  // insurance renews soon, the broadband deal is ending, and a school trip is to pay.
+  const dayOfMonth = (n) => { const d = new Date(now); d.setUTCDate(n); if (d < now) d.setUTCMonth(d.getUTCMonth() + 1); return d.toISOString().slice(0, 10); };
+  for (const [name, amount, every, due, category, auto, extra, by] of [
+    ['Mortgage', 945, 'month', dayOfMonth(1), 'home', true, {}, ALEX],
+    ['Council tax', 168, 'month', dayOfMonth(15), 'council', true, {}, SAM],
+    ['Gas and electric', 118, 'month', dayOfMonth(20), 'energy', true, {}, ALEX],
+    ['Water', 42, 'month', dayOfMonth(8), 'water', true, {}, SAM],
+    ['Broadband', 32, 'month', dayOfMonth(12), 'internet', true, { ends: day(26) }, ALEX],
+    ['Car insurance', 486, 'year', day(19), 'insurance', false, {}, SAM],
+    ['Netflix', 10.99, 'month', dayOfMonth(4), 'subscriptions', true, {}, ALEX],
+    ['Disney+', 7.99, 'month', dayOfMonth(22), 'subscriptions', true, {}, SAM],
+    ['Spotify Family', 19.99, 'month', dayOfMonth(9), 'subscriptions', true, {}, ALEX],
+    ['Swimming lessons', 24, '4weeks', day(2), 'childcare', false, {}, SAM],
+    ['School trip', 18.5, 'once', day(5), 'childcare', false, { notes: "Leo's class to the zoo" }, ALEX],
+    ['Gym', 29, 'month', dayOfMonth(3), 'other', true, { personal: true }, null],
+  ]) {
+    const b = await call('POST', '/api/v1/bills', { name, amount: name === 'Gas and electric' ? 96 : amount, every, due, category, auto, ...extra }, by);
+    if (name === 'Gas and electric') await call('PUT', `/api/v1/bills/${b.id}`, { amount }, by);
+  }
 
   // The calendar: school kit days (one tomorrow, so there's something to pack), clubs, a one-off.
   const weekday = (n) => new Date(now.getTime() + n * DAY).getUTCDay();

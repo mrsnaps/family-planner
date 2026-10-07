@@ -13,6 +13,7 @@ const chores = require('./modules/chores');
 const calendar = require('./modules/calendar');
 const packing = require('./modules/packing');
 const money = require('./modules/money');
+const bills = require('./modules/bills');
 const ai = require('./modules/ai');
 const { createSuggesters } = require('./modules/ai/suggest');
 const { reminders } = require('./modules/reminders');
@@ -63,8 +64,9 @@ function createApp(store, options = {}) {
     clothesItems: clothesApi.items,
   });
   const moneyApi = money.register(router, store, { spending: shoppingApi.spending, chores: choresApi, clothesStats: clothesApi.stats });
+  const billsApi = bills.register(router, store);
 
-  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi, packing: packingApi });
+  const suggesters = createSuggesters({ familySummary: fam.summary, food: foodApi, clothes: clothesApi, shopping: shoppingApi, chores: choresApi, packing: packingApi, bills: billsApi });
   const aiApi = ai.register(router, store, { familySummary: fam.summary, food: foodApi, suggesters });
 
   chat.register(router, store, {
@@ -73,15 +75,18 @@ function createApp(store, options = {}) {
     ai: aiApi.chat,
   });
 
-  const remindersNow = (food = foodApi.stats(), clothesStats = clothesApi.stats(), choreSummary = choresApi.summary(), calendarSummary = calendarApi.summary()) =>
-    reminders({ food, clothes: clothesStats, shopping: shoppingApi.count(), chores: choreSummary, calendar: calendarSummary, swaps: clothesApi.swaps(), money: moneyApi.summary(), trips: packingApi.upcoming() });
+  // Personal bills only count for the person they belong to (X-Family-Member).
+  const memberOf = (req) => (req && req.headers && String(req.headers['x-family-member'] || '').toLowerCase()) || null;
+  const remindersNow = (me, food = foodApi.stats(), clothesStats = clothesApi.stats(), choreSummary = choresApi.summary(), calendarSummary = calendarApi.summary()) =>
+    reminders({ food, clothes: clothesStats, shopping: shoppingApi.count(), chores: choreSummary, calendar: calendarSummary, swaps: clothesApi.swaps(), money: moneyApi.summary(), trips: packingApi.upcoming(), bills: billsApi.view(me) });
 
   // The combined data panel: one call for a dashboard (or a phone app's home screen).
-  router.get('/api/v1/dashboard', () => {
+  router.get('/api/v1/dashboard', (req) => {
     const food = foodApi.stats();
     const clothesStats = clothesApi.stats();
     const choreSummary = choresApi.summary();
     const calendarSummary = calendarApi.summary();
+    const billView = billsApi.view(memberOf(req));
     return {
       family: fam.summary(),
       food,
@@ -90,18 +95,19 @@ function createApp(store, options = {}) {
       chores: choreSummary,
       calendar: calendarSummary,
       trips: packingApi.upcoming(),
-      reminders: remindersNow(food, clothesStats, choreSummary, calendarSummary),
+      bills: { upcoming: billView.upcoming.slice(0, 5), totals: billView.totals },
+      reminders: remindersNow(memberOf(req), food, clothesStats, choreSummary, calendarSummary),
       handMeDowns: clothesApi.handMeDowns(),
       ai: { ready: aiApi.publicSettings().ready, onDevice: aiApi.publicSettings().onDevice },
     };
   });
-  router.get('/api/v1/reminders', () => remindersNow());
+  router.get('/api/v1/reminders', (req) => remindersNow(memberOf(req)));
 
   const demoApi = demo.register(router, store, createApp);
 
   // Backup and restore everything except the AI key. In the demo, the backup is still the
   // household's own data, and restoring waits until the demo is over.
-  const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores', 'calendar', 'packing', 'money'];
+  const SECTIONS = ['family', 'food', 'clothes', 'shopping', 'chores', 'calendar', 'packing', 'money', 'bills'];
   router.get('/api/v1/export', () => {
     const data = {};
     const source = demoApi.inDemo() ? store.data.demoSaved || {} : store.data;
@@ -120,7 +126,7 @@ function createApp(store, options = {}) {
       if (data[k] !== undefined && (typeof data[k] !== 'object' || Array.isArray(data[k]))) throw new HttpError(400, `Backup section ${k} is damaged`);
     }
     // Lists the app reads straight away must be lists, or the pages would break after restoring.
-    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites', 'ratings'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'], calendar: ['events'], packing: ['trips'] };
+    const LISTS = { family: ['children', 'dietary'], food: ['pantry', 'recipes', 'favourites', 'ratings'], clothes: ['items'], shopping: ['items'], chores: ['list', 'log', 'adults'], calendar: ['events'], packing: ['trips'], bills: ['items'] };
     for (const [k, keys] of Object.entries(LISTS)) {
       for (const key of keys) {
         const v = data[k] && data[k][key];

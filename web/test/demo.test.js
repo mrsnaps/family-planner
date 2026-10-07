@@ -45,6 +45,10 @@ test('the demo shows a lived-in family, then puts the real one back exactly', as
   assert.ok(trips.length === 1 && trips[0].packedCount > 0, 'a trip, part packed');
   const month = (await call('GET', '/money')).body;
   assert.ok(month.budget && month.categories.filter((c) => c.total).length >= 2, 'spending by category with a budget');
+  const bills = (await call('GET', '/bills')).body;
+  assert.ok(bills.bills.length >= 10 && bills.totals.family > 1000 && bills.totals.personal > 0, 'family bills and a personal one');
+  assert.deepStrictEqual(bills.tips.map((x) => x.kind).sort(), ['price', 'renewal', 'renewal', 'subscriptions']);
+  assert.ok(dash.reminders.some((r) => r.kind === 'bills'));
 
   // Leftovers in the fridge (eaten first), food in the freezer, ratings and lunchboxes.
   const food = (await call('GET', '/food/stats')).body;
